@@ -1,0 +1,41 @@
+{
+  "appTitle": "DisasterLink",
+  "systemDefault": "System Default",
+  "english": "English",
+  "hindi": "Hindi",
+  "marathi": "Marathi",
+
+  "floodAlert": "FLOOD ALERT",
+  "floodAlertMsg": "Stay near shelters and avoid low-lying areas",
+
+  "emergency": "EMERGENCY",
+  "actions": "ACTIONS",
+  "sendHelp": "SEND HELP",
+  "on": "ON",
+  "off": "OFF",
+
+  "nearby": "NEARBY",
+  "shelters": "SHELTERS",
+
+  "locationLabel": "Location: Lat 19.07, Lon 72.87",
+  "offlineMode": "Offline Mode",
+  "offline": "OFFLINE",
+
+  "getDirections": "Get Directions",
+
+  "shelter1": "Emergency Shelter 1",
+  "shelter2": "Community Center",
+  "shelter3": "School Shelter",
+  "shelter4": "Hospital Refuge",
+
+  "available": "Available",
+  "limited": "Limited",
+  "full": "Full",
+  "open": "Open",
+
+  "sendRequest": "Send Request",
+  "sendRequestMsg": "Are you sure you want to send an emergency help request? This will notify nearby rescue teams and authorities with your location.",
+  "cancel": "Cancel",
+  "sendHelpDialog": "Send Help",
+  "helpSentSuccess": "Emergency help request sent successfully!"
+}

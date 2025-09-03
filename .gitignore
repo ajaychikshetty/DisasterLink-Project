@@ -1,0 +1,291 @@
+# ===========================================
+# DisasterLink Project - Root .gitignore
+# ===========================================
+
+# ===========================================
+# CRITICAL: Firebase & API Keys (SECURITY)
+# ===========================================
+# Firebase configuration files with API keys
+**/google-services.json
+**/GoogleService-Info.plist
+**/firebase_options.dart
+**/firebase.json
+
+# Environment files and secrets
+.env
+.env.local
+.env.development
+.env.production
+.env.staging
+*.env
+secrets.json
+config.json
+api-keys.json
+
+# ===========================================
+# Flutter/Dart Build Artifacts
+# ===========================================
+# Build directories
+**/build/
+**/.build/
+**/.dart_tool/
+**/.flutter-plugins
+**/.flutter-plugins-dependencies
+**/.pub-cache/
+**/.pub/
+**/pubspec.lock
+
+# Flutter specific
+**/ios/Flutter/.last_build_id
+**/ios/Flutter/ephemeral/
+**/macos/Flutter/ephemeral/
+**/windows/flutter/ephemeral/
+**/linux/flutter/ephemeral/
+
+# ===========================================
+# Android Build Artifacts
+# ===========================================
+# Android build outputs
+**/android/app/debug/
+**/android/app/profile/
+**/android/app/release/
+**/android/.gradle/
+**/android/build/
+**/android/app/build/
+**/android/gradle/
+**/android/local.properties
+
+# Android keystores and signing files
+**/*.keystore
+**/*.jks
+**/*.p12
+**/*.pem
+**/*.key
+**/*.crt
+**/key.properties
+**/upload-keystore.jks
+**/app-signing-key.jks
+
+# ===========================================
+# iOS Build Artifacts
+# ===========================================
+# iOS build outputs
+**/ios/build/
+**/ios/DerivedData/
+**/ios/Pods/
+**/ios/Podfile.lock
+**/ios/.symlinks/
+**/ios/Flutter/App.framework
+**/ios/Flutter/Flutter.framework
+**/ios/Flutter/Flutter.podspec
+**/ios/Flutter/Generated.xcconfig
+**/ios/Flutter/ephemeral/
+**/ios/Flutter/app.flx
+**/ios/Flutter/app.zip
+**/ios/Flutter/flutter_assets/
+**/ios/Flutter/flutter_export_environment.sh
+**/ios/ServiceDefinitions.json
+**/ios/Runner/GeneratedPluginRegistrant.*
+
+# ===========================================
+# macOS Build Artifacts
+# ===========================================
+**/macos/build/
+**/macos/Pods/
+**/macos/Podfile.lock
+**/macos/.symlinks/
+**/macos/Flutter/GeneratedPluginRegistrant.swift
+**/macos/Flutter/ephemeral/
+
+# ===========================================
+# Windows Build Artifacts
+# ===========================================
+**/windows/build/
+**/windows/flutter/ephemeral/
+**/windows/flutter/generated_plugin_registrant.*
+
+# ===========================================
+# Linux Build Artifacts
+# ===========================================
+**/linux/build/
+**/linux/flutter/ephemeral/
+**/linux/flutter/generated_plugin_registrant.*
+
+# ===========================================
+# Web Build Artifacts
+# ===========================================
+**/web/build/
+
+# ===========================================
+# IDE and Editor Files
+# ===========================================
+# IntelliJ IDEA
+**/.idea/
+**/*.iml
+**/*.ipr
+**/*.iws
+
+# Visual Studio Code
+**/.vscode/
+**/*.code-workspace
+
+# Android Studio
+**/.android/
+**/.gradle/
+**/local.properties
+
+# Xcode
+**/*.xcodeproj/xcuserdata/
+**/*.xcworkspace/xcuserdata/
+**/DerivedData/
+**/build/
+
+# ===========================================
+# System Files
+# ===========================================
+# macOS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Linux
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+
+# ===========================================
+# Logs and Temporary Files
+# ===========================================
+# Log files
+**/*.log
+**/logs/
+**/log/
+
+# Temporary files
+**/*.tmp
+**/*.temp
+**/*.swp
+**/*.swo
+**/*~
+**/.swp
+**/.swo
+
+# ===========================================
+# Package Manager Files
+# ===========================================
+# Node.js (if any web components)
+**/node_modules/
+**/npm-debug.log*
+**/yarn-debug.log*
+**/yarn-error.log*
+**/package-lock.json
+**/yarn.lock
+
+# Python (if any backend scripts)
+**/__pycache__/
+**/*.py[cod]
+**/*$py.class
+**/*.so
+**/.Python
+**/env/
+**/venv/
+**/ENV/
+**/env.bak/
+**/venv.bak/
+
+# ===========================================
+# Database Files
+# ===========================================
+**/*.db
+**/*.sqlite
+**/*.sqlite3
+
+# ===========================================
+# Backup Files
+# ===========================================
+**/*.bak
+**/*.backup
+**/*.old
+
+# ===========================================
+# Coverage and Testing
+# ===========================================
+**/coverage/
+**/.coverage
+**/htmlcov/
+**/.pytest_cache/
+**/.nyc_output/
+
+# ===========================================
+# Documentation Build
+# ===========================================
+**/doc/api/
+**/docs/_build/
+**/site/
+
+# ===========================================
+# Symbolication and Obfuscation
+# ===========================================
+**/app.*.symbols
+**/app.*.map.json
+
+# ===========================================
+# Version Control
+# ===========================================
+# Git
+**/.git/
+**/.gitignore.bak
+
+# SVN
+**/.svn/
+
+# ===========================================
+# Miscellaneous
+# ===========================================
+# Class files
+**/*.class
+
+# Python compiled files
+**/*.pyc
+**/*.pyo
+
+# History files
+**/.history
+**/.migrate_working_dir/
+
+# Atom editor
+**/.atom/
+
+# Build logs
+**/.buildlog/
+
+# Swift Package Manager
+**/.swiftpm/
+
+# ===========================================
+# Project Specific
+# ===========================================
+# Add any project-specific files to ignore here
+# Example: **/local_config.dart
+# Example: **/debug_config.json
+
+# ===========================================
+# SECURITY REMINDER
+# ===========================================
+# Remember to:
+# 1. Never commit API keys, secrets, or credentials
+# 2. Use environment variables for sensitive data
+# 3. Keep Firebase configuration files out of version control
+# 4. Use separate Firebase projects for development/production
+# 5. Regularly audit what files are being tracked by git
