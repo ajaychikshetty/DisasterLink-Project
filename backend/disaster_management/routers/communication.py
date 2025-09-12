@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException
 from firebase import db
 from config import settings
 from schemas.communication import StatusUpdate, Broadcast
-from utils.sms import send_sms
+# from utils.sms import send_sms
 from utils.geo import haversine
 
 router = APIRouter(prefix="/api", tags=["Communication"])

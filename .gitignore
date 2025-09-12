@@ -54,7 +54,7 @@ api-keys.json
 **/android/app/build/
 **/android/gradle/
 **/android/local.properties
-
+backend/disaster_management/serviceAccountKey.json
 # Android keystores and signing files
 **/*.keystore
 **/*.jks
@@ -65,7 +65,6 @@ api-keys.json
 **/key.properties
 **/upload-keystore.jks
 **/app-signing-key.jks
-
 # ===========================================
 # iOS Build Artifacts
 # ===========================================

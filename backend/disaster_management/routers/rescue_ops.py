@@ -1,5 +1,5 @@
 # backend/app/routes/rescue_ops.py
-from utils.sms import send_sms
+# from utils.sms import send_sms
 from fastapi import APIRouter, HTTPException
 from firebase import db
 from config import settings
