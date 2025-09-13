@@ -205,7 +205,8 @@ async def sendAlert(alert: DisasterAlertRequest):
     sends an alert message to all numbers via send_sms.
     """
     msg = f"⚠️ Disaster Alert: {alert.disaster_name}\nStay safe and follow instructions."
-
+    print(alert.numbers)
+    print(alert.disaster_name)
     results = []
     for num in alert.numbers:
         res = send_sms(num, msg)

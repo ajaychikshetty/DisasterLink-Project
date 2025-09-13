@@ -1,7 +1,7 @@
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from routers import users, incidents, rescue_ops, shelters, maps, communication, rescuers, sms
+from routers import users, incidents, rescue_ops, shelters, maps, communication, rescuers, sms, messages
 
 app = FastAPI(
     title="Disaster Management API",
@@ -27,6 +27,7 @@ app.include_router(maps.router)
 app.include_router(communication.router)
 app.include_router(rescuers.router)
 app.include_router(sms.router)
+app.include_router(messages.router)
 
 
 @app.get("/", tags=["Root"])

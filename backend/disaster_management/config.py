@@ -11,12 +11,13 @@ class Settings(BaseSettings):
     FIREBASE_COLLECTION_SHELTERS: str = "shelters"
     FIREBASE_COLLECTION_LOGS: str = "rescue_logs"
     FIREBASE_COLLECTION_INCIDENTS: str = "incidents"
+    FIREBASE_COLLECTION_MESSAGES: str = "Messages"
     # TWILIO_ACCOUNT_SID: str
     # TWILIO_AUTH_TOKEN: str
     # TWILIO_FROM_NUMBER: str
 
-    class Config:
-        env_file = ".env"
+    # class Config:
+    #     env_file = ".env"
 
 
 
