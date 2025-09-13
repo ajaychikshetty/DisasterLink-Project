@@ -17,7 +17,8 @@
   "nearby": "NEARBY",
   "shelters": "SHELTERS",
 
-  "locationLabel": "Location: Lat 19.07, Lon 72.87",
+  "locationLabel": "Current Location",
+  "city": "City",
   "offlineMode": "Offline Mode",
   "offline": "OFFLINE",
 
@@ -37,5 +38,7 @@
   "sendRequestMsg": "Are you sure you want to send an emergency help request? This will notify nearby rescue teams and authorities with your location.",
   "cancel": "Cancel",
   "sendHelpDialog": "Send Help",
-  "helpSentSuccess": "Emergency help request sent successfully!"
+  "helpSentSuccess": "Emergency help request sent successfully!",
+  "notifications" : "Notifications",
+  "profile" : "Profile"
 }

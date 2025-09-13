@@ -184,8 +184,14 @@ abstract class AppLocalizations {
   /// No description provided for @locationLabel.
   ///
   /// In en, this message translates to:
-  /// **'Location: Lat 19.07, Lon 72.87'**
+  /// **'Current Location'**
   String get locationLabel;
+
+  /// No description provided for @city.
+  ///
+  /// In en, this message translates to:
+  /// **'City'**
+  String get city;
 
   /// No description provided for @offlineMode.
   ///
@@ -282,6 +288,18 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Emergency help request sent successfully!'**
   String get helpSentSuccess;
+
+  /// No description provided for @notifications.
+  ///
+  /// In en, this message translates to:
+  /// **'Notifications'**
+  String get notifications;
+
+  /// No description provided for @profile.
+  ///
+  /// In en, this message translates to:
+  /// **'Profile'**
+  String get profile;
 }
 
 class _AppLocalizationsDelegate extends LocalizationsDelegate<AppLocalizations> {

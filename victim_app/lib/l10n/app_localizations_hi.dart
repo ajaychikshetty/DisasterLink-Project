@@ -51,7 +51,10 @@ class AppLocalizationsHi extends AppLocalizations {
   String get shelters => 'शरण स्थल';
 
   @override
-  String get locationLabel => 'स्थान: अक्षांश 19.07, देशांतर 72.87';
+  String get locationLabel => 'वर्तमान स्थान';
+
+  @override
+  String get city => 'शहर';
 
   @override
   String get offlineMode => 'ऑफ़लाइन मोड';
@@ -100,4 +103,10 @@ class AppLocalizationsHi extends AppLocalizations {
 
   @override
   String get helpSentSuccess => 'आपातकालीन सहायता अनुरोध सफलतापूर्वक भेजा गया!';
+
+  @override
+  String get notifications => 'अधिसूचना';
+
+  @override
+  String get profile => 'प्रोफाइल';
 }

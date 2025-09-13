@@ -51,7 +51,10 @@ class AppLocalizationsEn extends AppLocalizations {
   String get shelters => 'SHELTERS';
 
   @override
-  String get locationLabel => 'Location: Lat 19.07, Lon 72.87';
+  String get locationLabel => 'Current Location';
+
+  @override
+  String get city => 'City';
 
   @override
   String get offlineMode => 'Offline Mode';
@@ -100,4 +103,10 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get helpSentSuccess => 'Emergency help request sent successfully!';
+
+  @override
+  String get notifications => 'Notifications';
+
+  @override
+  String get profile => 'Profile';
 }
