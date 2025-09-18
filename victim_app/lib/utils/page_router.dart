@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:victim_app/screens/chatbot_screen.dart';
 import 'package:victim_app/screens/home_screen.dart';
 import 'package:victim_app/screens/landing_screen.dart' show LandingScreen;
 import 'package:victim_app/screens/notifications_screen.dart';
@@ -11,7 +12,7 @@ import 'package:victim_app/screens/shelter_screen.dart';
 import 'package:victim_app/screens/signup_screen.dart';
 
 final GoRouter router = GoRouter(
-  initialLocation: '/landing',
+  initialLocation: '/home',
   routes: <RouteBase>[
     GoRoute(
       path: '/',
@@ -22,6 +23,11 @@ final GoRouter router = GoRouter(
       path: '/phone',
       builder: (BuildContext context, GoRouterState state) =>
           const PhoneInputScreen(),
+    ),
+    GoRoute(
+      path: '/chatbot',
+      builder: (BuildContext context, GoRouterState state) =>
+          const ChatBot(),
     ),
      GoRoute(
       path: '/report',

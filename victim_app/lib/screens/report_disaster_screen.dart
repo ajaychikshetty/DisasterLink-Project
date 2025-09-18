@@ -56,7 +56,6 @@ class _ReportDisasterScreenState extends ConsumerState<ReportDisasterScreen>
     await ShelterService.debugShelters();
 
     // Add sample data if needed (for testing)
-    await _addSampleDataIfNeeded();
     print('Sample data check completed');
 
     // Force refresh the provider after initialization
@@ -65,31 +64,6 @@ class _ReportDisasterScreenState extends ConsumerState<ReportDisasterScreen>
         ref.refresh(sheltersProvider);
       }
     });
-  }
-
-  Future<void> _addSampleDataIfNeeded() async {
-    try {
-      print('Checking if sample data is needed...');
-
-      // Check if shelters already exist
-      final existingShelters = await ShelterService.getAllShelters();
-      print('Found ${existingShelters.length} existing shelters');
-
-      if (existingShelters.isEmpty) {
-        print('Adding sample shelters...');
-        await ShelterService.addSampleShelters();
-        print('Sample shelters added successfully');
-
-        // Refresh the provider to show new data
-        if (mounted) {
-          ref.refresh(sheltersProvider);
-        }
-      } else {
-        print('Sample data already exists, skipping...');
-      }
-    } catch (e) {
-      print('Error in _addSampleDataIfNeeded: $e');
-    }
   }
 
   Future<void> _getUserLocation() async {

@@ -19,6 +19,7 @@ class VictimBeaconService {
   Future<bool> startAdvertising({
     required String victimId,
     required String disasterZone,
+    required String victimName,
   }) async {
     try {
       if (_isAdvertising) {

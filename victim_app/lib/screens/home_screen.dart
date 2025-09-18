@@ -3,13 +3,9 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:url_launcher/url_launcher.dart';
 import 'package:victim_app/widgets/bottom_navbar.dart' show Bottom_NavBar;
 import '../l10n/app_localizations.dart';
 import '../models/shelter_model.dart';
-import '../services/shelter_service.dart';
-import '../services/location_service.dart';
-import '../services/geocoding_service.dart';
 import '../services/connectivity_service.dart';
 import '../mixins/unconscious_activity_mixin.dart';
 import '../services/global_unconscious_service.dart';
@@ -19,6 +15,7 @@ import 'package:telephony/telephony.dart';
 import 'package:intl/intl.dart';
 import 'package:battery_plus/battery_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 class Homescreen extends ConsumerStatefulWidget {
   const Homescreen({super.key});
@@ -34,7 +31,6 @@ class _HomescreenState extends ConsumerState<Homescreen>
 
   // Real data for shelters
   List<ShelterModel> nearbyShelters = [];
-  bool _isLoadingShelters = true;
   String _currentCity = 'Loading...';
   bool _isOnline = true;
   double? _userLat;
@@ -88,7 +84,6 @@ class _HomescreenState extends ConsumerState<Homescreen>
     });
 
     // Get user location and load shelters
-    await _getUserLocationAndLoadShelters();
     
     // Load disaster information
     await _loadDisasterInfo();
@@ -115,49 +110,6 @@ class _HomescreenState extends ConsumerState<Homescreen>
     final shouldEnable = _areEmergencyFeaturesActive && _unconsciousDetectionEnabled;
     await GlobalUnconsciousService.setUnconsciousDetectionEnabled(shouldEnable);
     // Don't set disaster area status here - it should only come from SMS detection
-  }
-
-  Future<void> _getUserLocationAndLoadShelters() async {
-    try {
-      // Get current location
-      final position = await LocationService.getLocationWithPermission();
-      if (position != null) {
-        setState(() {
-          _userLat = position.latitude;
-          _userLon = position.longitude;
-        });
-
-        // Get city name
-        final city = await GeocodingService.getCityFromCoordinates(
-          latitude: position.latitude,
-          longitude: position.longitude,
-        );
-
-        if (mounted) {
-          setState(() {
-            _currentCity = city;
-          });
-        }
-
-        // Load nearby shelters
-        await _loadNearbyShelters();
-      } else {
-        if (mounted) {
-          setState(() {
-            _currentCity = 'Location not available';
-            _isLoadingShelters = false;
-          });
-        }
-      }
-    } catch (e) {
-      print('Error getting location: $e');
-      if (mounted) {
-        setState(() {
-          _currentCity = 'Error getting location';
-          _isLoadingShelters = false;
-        });
-      }
-    }
   }
 
   Future<void> _loadDisasterInfo() async {
@@ -226,6 +178,77 @@ class _HomescreenState extends ConsumerState<Homescreen>
     }
   }
 
+  Future<void> _checkBluetoothAndStartBeacon() async {
+    // Check if Bluetooth is enabled
+    final bluetoothPermission = await Permission.bluetooth.status;
+    final bluetoothAdvertisePermission = await Permission.bluetoothAdvertise.status;
+    
+    if (bluetoothPermission != PermissionStatus.granted || 
+        bluetoothAdvertisePermission != PermissionStatus.granted) {
+      // Request Bluetooth permissions
+      Map<Permission, PermissionStatus> statuses = await [
+        Permission.bluetooth,
+        Permission.bluetoothAdvertise,
+      ].request();
+      
+      if (statuses[Permission.bluetooth] != PermissionStatus.granted ||
+          statuses[Permission.bluetoothAdvertise] != PermissionStatus.granted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Bluetooth permissions are required for beacon'),
+            backgroundColor: Colors.red,
+          ),
+        );
+        return;
+      }
+    }
+    
+    // Check if Bluetooth is enabled - if not, show intent to enable
+    try {
+      // Note: You might need to add a Bluetooth plugin to check if BT is enabled
+      // For now, we'll proceed with starting the beacon
+      await _startBeacon();
+    } catch (e) {
+      if (e.toString().contains('bluetooth') || e.toString().contains('Bluetooth')) {
+        // Show dialog to enable Bluetooth
+        _showBluetoothEnableDialog();
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error starting beacon: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  void _showBluetoothEnableDialog() {
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: Text('Bluetooth Required'),
+          content: Text('Please enable Bluetooth to use the victim beacon feature.'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                Navigator.of(context).pop();
+                // Here you can add code to open Bluetooth settings
+                // You might need to use a plugin like app_settings
+              },
+              child: Text('Enable Bluetooth'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   Future<void> _startBeacon() async {
     if (!_isBeaconSupported || !_hasBeaconPermission) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -238,16 +261,35 @@ class _HomescreenState extends ConsumerState<Homescreen>
     }
 
     try {
-      // Get user's phone number for victim ID
+      // Get user's phone number and name
       final prefs = await SharedPreferences.getInstance();
       final phoneNumber = prefs.getString('phone_number') ?? 'unknown';
+      final victimName = prefs.getString('victim_name') ?? prefs.getString('user_name') ?? 'Unknown Victim';
       
       // Use current city as disaster zone
       final disasterZone = _currentCity.isNotEmpty ? _currentCity : 'Unknown';
       
+      // Show beacon start message with victim details
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Starting beacon broadcast...'),
+              Text('Victim: $victimName', style: TextStyle(fontSize: 12)),
+              Text('ID: $phoneNumber', style: TextStyle(fontSize: 12)),
+            ],
+          ),
+          backgroundColor: Colors.blue,
+          duration: Duration(seconds: 3),
+        ),
+      );
+      
       final success = await _beaconService.startAdvertising(
         victimId: phoneNumber,
         disasterZone: disasterZone,
+        victimName: victimName, 
       );
       
       if (success) {
@@ -256,8 +298,16 @@ class _HomescreenState extends ConsumerState<Homescreen>
         });
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Beacon started successfully'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Beacon started successfully'),
+                Text('Broadcasting: $victimName ($phoneNumber)', style: TextStyle(fontSize: 12)),
+              ],
+            ),
             backgroundColor: Colors.green,
+            duration: Duration(seconds: 4),
           ),
         );
       } else {
@@ -345,40 +395,6 @@ class _HomescreenState extends ConsumerState<Homescreen>
     }
   }
 
-  Future<void> _loadNearbyShelters() async {
-    if (_userLat == null || _userLon == null) return;
-
-    setState(() {
-      _isLoadingShelters = true;
-    });
-
-    try {
-      final shelters = await ShelterService.getSheltersWithinRadius(
-        userLat: _userLat!,
-        userLon: _userLon!,
-        radiusKm: _shelterRadius,
-      );
-
-      if (mounted) {
-        setState(() {
-          nearbyShelters = shelters;
-          _isLoadingShelters = false;
-          // Don't change _isInDisasterArea here - it should only come from SMS detection
-        });
-
-        // Update unconscious detection when disaster area status changes
-        _updateUnconsciousDetection();
-      }
-    } catch (e) {
-      print('Error loading shelters: $e');
-      if (mounted) {
-        setState(() {
-          _isLoadingShelters = false;
-        });
-      }
-    }
-  }
-
   @override
   void dispose() {
     _animationController.dispose();
@@ -421,6 +437,11 @@ class _HomescreenState extends ConsumerState<Homescreen>
                 ),
                 titlePadding: const EdgeInsets.only(left: 20, bottom: 16),
               ),
+              actions: [
+                IconButton(onPressed: (){
+                  context.push('/chatbot');
+                }, icon: Icon(Icons.message, color: isDark ? Colors.white : Colors.black)),
+              ],
             ),
 
             // Content
@@ -440,10 +461,6 @@ class _HomescreenState extends ConsumerState<Homescreen>
                   _buildUnconsciousDetectionStatus(isDark, loc),
                   const SizedBox(height: 20),
                   _buildLocationAndStatus(isDark, loc),
-                  const SizedBox(height: 32),
-                  // Shelters Section
-                  _buildSheltersSection(loc, isDark, screenSize),
-
                   const SizedBox(height: 32),
                 ]),
               ),
@@ -608,14 +625,20 @@ class _HomescreenState extends ConsumerState<Homescreen>
 
         const SizedBox(height: 20),
 
-        // Beacon Controls
+        // Beacon Controls - Now greyed out when emergency features are inactive
         if (_isBeaconSupported && _hasBeaconPermission) ...[
           Container(
             padding: EdgeInsets.all(16),
             decoration: BoxDecoration(
-              color: Colors.blue.withOpacity(0.1),
+              color: _areEmergencyFeaturesActive 
+                  ? Colors.blue.withOpacity(0.1)
+                  : Colors.grey.withOpacity(0.1),
               borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Colors.blue.withOpacity(0.3)),
+              border: Border.all(
+                color: _areEmergencyFeaturesActive 
+                    ? Colors.blue.withOpacity(0.3)
+                    : Colors.grey.withOpacity(0.3)
+              ),
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -625,15 +648,21 @@ class _HomescreenState extends ConsumerState<Homescreen>
                   style: TextStyle(
                     fontSize: 16,
                     fontWeight: FontWeight.bold,
-                    color: Colors.blue[800],
+                    color: _areEmergencyFeaturesActive 
+                        ? Colors.blue[800]
+                        : Colors.grey[600],
                   ),
                 ),
                 SizedBox(height: 8),
                 Text(
-                  'Broadcast your location to rescuers',
+                  _areEmergencyFeaturesActive 
+                      ? 'Broadcast your location to rescuers'
+                      : 'Emergency features must be enabled',
                   style: TextStyle(
                     fontSize: 12,
-                    color: Colors.blue[600],
+                    color: _areEmergencyFeaturesActive 
+                        ? Colors.blue[600]
+                        : Colors.grey[500],
                   ),
                 ),
                 SizedBox(height: 12),
@@ -641,11 +670,15 @@ class _HomescreenState extends ConsumerState<Homescreen>
                   children: [
                     Expanded(
                       child: ElevatedButton.icon(
-                        onPressed: _isBeaconAdvertising ? null : _startBeacon,
+                        onPressed: (_areEmergencyFeaturesActive && !_isBeaconAdvertising) 
+                            ? _checkBluetoothAndStartBeacon 
+                            : null,
                         icon: Icon(Icons.play_arrow, size: 18),
                         label: Text('Start Beacon'),
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: _isBeaconAdvertising ? Colors.grey : Colors.green,
+                          backgroundColor: _areEmergencyFeaturesActive
+                              ? (_isBeaconAdvertising ? Colors.grey : Colors.green)
+                              : Colors.grey[400],
                           foregroundColor: Colors.white,
                           padding: EdgeInsets.symmetric(vertical: 8),
                         ),
@@ -654,11 +687,15 @@ class _HomescreenState extends ConsumerState<Homescreen>
                     SizedBox(width: 12),
                     Expanded(
                       child: ElevatedButton.icon(
-                        onPressed: _isBeaconAdvertising ? _stopBeacon : null,
+                        onPressed: (_areEmergencyFeaturesActive && _isBeaconAdvertising) 
+                            ? _stopBeacon 
+                            : null,
                         icon: Icon(Icons.stop, size: 18),
                         label: Text('Stop Beacon'),
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: _isBeaconAdvertising ? Colors.red : Colors.grey,
+                          backgroundColor: _areEmergencyFeaturesActive
+                              ? (_isBeaconAdvertising ? Colors.red : Colors.grey)
+                              : Colors.grey[400],
                           foregroundColor: Colors.white,
                           padding: EdgeInsets.symmetric(vertical: 8),
                         ),
@@ -666,7 +703,7 @@ class _HomescreenState extends ConsumerState<Homescreen>
                     ),
                   ],
                 ),
-                if (_isBeaconAdvertising) ...[
+                if (_isBeaconAdvertising && _areEmergencyFeaturesActive) ...[
                   SizedBox(height: 8),
                   Container(
                     padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
@@ -879,463 +916,6 @@ class _HomescreenState extends ConsumerState<Homescreen>
           ),
         ),
       ],
-    );
-  }
-
-  double _shelterRadius = 30.0;
-  Widget _buildSheltersSection(
-    AppLocalizations loc,
-    bool isDark,
-    Size screenSize,
-  ) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          loc.nearby,
-          style: TextStyle(
-            fontSize: 28,
-            fontWeight: FontWeight.w900,
-            color: isDark ? Colors.white : Colors.black,
-            letterSpacing: 2,
-          ),
-        ),
-        Text(
-          loc.shelters,
-          style: TextStyle(
-            fontSize: 28,
-            fontWeight: FontWeight.w900,
-            color: isDark ? Colors.white : Colors.black,
-            letterSpacing: 2,
-          ),
-        ),
-              ],
-            ),
-
-            // Filter button
-            IconButton(
-              onPressed: _showRadiusFilterDialog,
-              icon: Icon(
-                Icons.filter_list,
-                color: isDark ? Colors.white : Colors.black,
-              ),
-              tooltip: 'Filter by distance',
-            ),
-          ],
-        ),
-
-        // Radius indicator
-        Padding(
-          padding: const EdgeInsets.only(bottom: 10),
-          child: Text(
-            'Within ${_shelterRadius.toStringAsFixed(0)} km',
-            style: TextStyle(
-              fontSize: 14,
-              color: isDark ? Colors.white70 : Colors.black54,
-            ),
-          ),
-        ),
-
-        const SizedBox(height: 10),
-
-        _isLoadingShelters
-            ? const Center(
-                child: Padding(
-                  padding: EdgeInsets.all(40.0),
-                  child: CircularProgressIndicator(),
-                ),
-              )
-            : nearbyShelters.isEmpty
-            ? _buildNoSheltersFound(isDark)
-            : Column(
-                children: [
-                  ...nearbyShelters
-                      .map(
-                        (shelter) => Padding(
-                          padding: const EdgeInsets.only(bottom: 16),
-                          child: _buildProfessionalShelterCard(shelter, isDark),
-                        ),
-                      )
-                      .toList(),
-                ],
-              ),
-      ],
-    );
-  }
-
-  void _showRadiusFilterDialog() {
-    showDialog(
-      context: context,
-      builder: (BuildContext context) {
-        return StatefulBuilder(
-          builder: (context, setState) {
-            return AlertDialog(
-              title: Text('Filter Nearby Shelters'),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text('Select maximum distance (km):'),
-                  SizedBox(height: 20),
-                  Slider(
-                    value: _shelterRadius,
-                    min: 5,
-                    max: 100,
-                    divisions: 19,
-                    label: _shelterRadius.round().toString(),
-                    onChanged: (value) {
-                      setState(() {
-                        _shelterRadius = value;
-                      });
-                    },
-                  ),
-                  Text('${_shelterRadius.toStringAsFixed(0)} km'),
-                  SizedBox(height: 20),
-                  OutlinedButton(
-                    onPressed: () {
-                      Navigator.pop(context);
-                      context.go('/shelter');
-                    },
-                    child: Text('View All Shelters'),
-                  ),
-                ],
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: Text('Cancel'),
-                ),
-                ElevatedButton(
-                  onPressed: () {
-                    Navigator.pop(context);
-                    _loadNearbyShelters();
-                  },
-                  child: Text('Apply Filter'),
-                ),
-              ],
-            );
-          },
-        );
-      },
-    );
-  }
-
-  Widget _buildNoSheltersFound(bool isDark) {
-    return Container(
-      height: 200,
-      margin: const EdgeInsets.symmetric(vertical: 20),
-            decoration: BoxDecoration(
-        color: isDark ? Colors.grey[900] : Colors.grey[100],
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: isDark ? Colors.grey[700]! : Colors.grey[300]!,
-        ),
-      ),
-      child: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.home_work_outlined, size: 48, color: Colors.grey[400]),
-            const SizedBox(height: 16),
-            Text(
-              'No Shelters Found',
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-                color: isDark ? Colors.white : Colors.black,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'No shelters found within 10km radius',
-              style: TextStyle(fontSize: 14, color: Colors.grey[600]),
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 16),
-            ElevatedButton.icon(
-              onPressed: _loadNearbyShelters,
-              icon: const Icon(Icons.refresh),
-              label: const Text('Refresh'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.green,
-                foregroundColor: Colors.white,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildProfessionalShelterCard(ShelterModel shelter, bool isDark) {
-    final distance = _userLat != null && _userLon != null
-        ? shelter.calculateDistance(_userLat!, _userLon!)
-        : 0.0;
-
-    final availableSpaces = shelter.capacity - shelter.currentOccupancy;
-    final occupancyPercentage = shelter.currentOccupancy / shelter.capacity;
-
-    Color statusColor;
-
-    if (occupancyPercentage >= 1.0) {
-      statusColor = const Color(0xFFD32F2F);
-    } else if (occupancyPercentage >= 0.8) {
-      statusColor = const Color(0xFFFF8F00);
-    } else {
-      statusColor = const Color(0xFF1976D2);
-    }
-
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.grey[900],
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: Colors.grey[800]!, width: 1),
-              boxShadow: [
-                BoxShadow(
-            color: Colors.black.withOpacity(0.2),
-                  blurRadius: 12,
-            offset: const Offset(0, 4),
-                ),
-              ],
-            ),
-            child: Material(
-              color: Colors.transparent,
-              child: InkWell(
-          borderRadius: BorderRadius.circular(18),
-          onTap: () => _showShelterDetails(shelter),
-                child: Padding(
-            padding: const EdgeInsets.all(20),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                Row(
-                  children: [
-                    Container(
-                      width: 14,
-                      height: 14,
-                            decoration: BoxDecoration(
-                        color: statusColor,
-                              shape: BoxShape.circle,
-                              boxShadow: [
-                                BoxShadow(
-                            color: statusColor.withOpacity(0.5),
-                            blurRadius: 4,
-                            offset: const Offset(0, 1),
-                                ),
-                              ],
-                            ),
-                    ),
-                    const SizedBox(width: 16),
-
-                    Expanded(
-                      child: Text(
-                        shelter.name,
-                        style: const TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.white,
-                        ),
-                      ),
-                    ),
-
-                    if (_userLat != null && _userLon != null)
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 6,
-                        ),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF4285F4).withOpacity(0.2),
-                          borderRadius: BorderRadius.circular(16),
-                          border: Border.all(
-                            color: const Color(0xFF4285F4).withOpacity(0.3),
-                          ),
-                        ),
-                        child: Text(
-                          '${distance.toStringAsFixed(1)} km',
-                          style: const TextStyle(
-                            fontSize: 12,
-                            color: Color(0xFF4285F4),
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ),
-                  ],
-                      ),
-
-                      const SizedBox(height: 12),
-
-                Text(
-                  shelter.address,
-                          style: TextStyle(
-                            fontSize: 14,
-                    color: Colors.grey[400],
-                    height: 1.3,
-                          ),
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                ),
-
-                const SizedBox(height: 20),
-
-                Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        color: Colors.grey[800],
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Icon(
-                        Icons.people_rounded,
-                        size: 18,
-                        color: Colors.grey[300],
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                      Text(
-                      'Capacity: ${shelter.currentOccupancy}/${shelter.capacity}',
-                      style: const TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
-                        color: Colors.white,
-                      ),
-                    ),
-                    const Spacer(),
-                    Text(
-                      '$availableSpaces spaces available',
-                      style: TextStyle(
-                        fontSize: 14,
-                        color: availableSpaces > 0
-                            ? const Color(0xFF4CAF50)
-                            : const Color(0xFFD32F2F),
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ],
-                ),
-
-                const SizedBox(height: 16),
-                Row(
-                  children: [
-                      Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                          vertical: 6,
-                        ),
-                        decoration: BoxDecoration(
-                        color: shelter.status == 'Closed'
-                            ? Colors.red.withOpacity(0.2)
-                            : Colors.green.withOpacity(0.2),
-                          borderRadius: BorderRadius.circular(12),
-                        border: Border.all(
-                          color: shelter.status == 'Closed'
-                              ? Colors.red.withOpacity(0.3)
-                              : Colors.green.withOpacity(0.3),
-                        ),
-                      ),
-                      child: Row(
-                        children: [
-                          Icon(
-                            shelter.status == 'Open'
-                                ? Icons.check_circle
-                                : shelter.status == 'Closed'
-                                ? Icons.cancel
-                                : Icons.info,
-                            color: shelter.status == 'Closed'
-                                ? Colors.red
-                                : Colors.green,
-                            size: 16,
-                          ),
-                          const SizedBox(width: 6),
-                          Text(
-                            shelter.status,
-                          style: TextStyle(
-                              color: shelter.status == 'Closed'
-                                  ? Colors.red
-                                  : Colors.green,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 13,
-                            ),
-                          ),
-                        ],
-                        ),
-                      ),
-                    ],
-                  ),
-                const SizedBox(height: 10),
-                Container(
-                  height: 8,
-                  decoration: BoxDecoration(
-                    color: Colors.grey[800],
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                  child: FractionallySizedBox(
-                    alignment: Alignment.centerLeft,
-                    widthFactor: occupancyPercentage.clamp(0.0, 1.0),
-                    child: Container(
-                      decoration: BoxDecoration(
-                        color: statusColor,
-                        borderRadius: BorderRadius.circular(4),
-                        boxShadow: [
-                          BoxShadow(
-                            color: statusColor.withOpacity(0.5),
-                            blurRadius: 4,
-                            offset: const Offset(0, 1),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-
-                Row(
-                  children: [
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        onPressed: () => _getDirectionsToShelter(shelter),
-                        icon: const Icon(Icons.directions_rounded, size: 18),
-                        label: const Text('Directions'),
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: Colors.white,
-                          side: BorderSide(color: Colors.grey[700]!),
-                          padding: const EdgeInsets.symmetric(vertical: 12),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    if (shelter.contactNumber.isNotEmpty)
-                      Expanded(
-                        child: ElevatedButton.icon(
-                          onPressed: () => _callShelter(shelter),
-                          icon: const Icon(Icons.phone_rounded, size: 18),
-                          label: const Text('Call'),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFF4285F4),
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(vertical: 12),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            elevation: 2,
-                          ),
-                        ),
-                      ),
-                  ],
-                ),
-              ],
-            ),
-              ),
-            ),
-          ),
     );
   }
 
@@ -1650,439 +1230,6 @@ class _HomescreenState extends ConsumerState<Homescreen>
       },
     );
   }
-
-  void _showShelterDetails(ShelterModel shelter) {
-    final distance = _userLat != null && _userLon != null
-        ? shelter.calculateDistance(_userLat!, _userLon!)
-        : 0.0;
-
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.transparent,
-      isScrollControlled: true,
-      builder: (context) => DraggableScrollableSheet(
-        expand: false,
-        initialChildSize: 0.7,
-        minChildSize: 0.5,
-        maxChildSize: 0.9,
-        builder: (context, scrollController) => Container(
-          padding: const EdgeInsets.all(24),
-          decoration: BoxDecoration(
-            color: Colors.grey[900],
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.3),
-                blurRadius: 20,
-                offset: const Offset(0, -5),
-              ),
-            ],
-          ),
-          child: SingleChildScrollView(
-            controller: scrollController,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Center(
-                  child: Container(
-                    width: 60,
-                    height: 5,
-                    decoration: BoxDecoration(
-                      color: Colors.grey[500],
-                      borderRadius: BorderRadius.circular(3),
-                    ),
-                  ),
-                ),
-
-                const SizedBox(height: 24),
-
-                Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF1976D2).withOpacity(0.2),
-                        borderRadius: BorderRadius.circular(16),
-                        border: Border.all(
-                          color: const Color(0xFF1976D2).withOpacity(0.3),
-                        ),
-                      ),
-                      child: const Icon(
-                        Icons.home_rounded,
-                        color: Color(0xFF1976D2),
-                        size: 28,
-                      ),
-                    ),
-                    const SizedBox(width: 16),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            shelter.name,
-                            style: const TextStyle(
-                              fontSize: 22,
-                              fontWeight: FontWeight.bold,
-                              color: Colors.white,
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 12,
-                              vertical: 6,
-                            ),
-                            decoration: BoxDecoration(
-                              color: shelter.status == 'Available'
-                                  ? const Color(0xFF4CAF50).withOpacity(0.2)
-                                  : const Color(0xFFFF8F00).withOpacity(0.2),
-                              borderRadius: BorderRadius.circular(12),
-                              border: Border.all(
-                                color: shelter.status == 'Available'
-                                    ? const Color(0xFF4CAF50).withOpacity(0.3)
-                                    : const Color(0xFFFF8F00).withOpacity(0.3),
-                              ),
-                            ),
-                            child: Text(
-                              shelter.status,
-                              style: TextStyle(
-                                color: shelter.status == 'Available'
-                                    ? const Color(0xFF4CAF50)
-                                    : const Color(0xFFFF8F00),
-                                fontWeight: FontWeight.bold,
-                                fontSize: 12,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-
-                const SizedBox(height: 24),
-
-                Container(
-                  padding: const EdgeInsets.all(20),
-                  decoration: BoxDecoration(
-                    color: Colors.grey[800],
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(color: Colors.grey[700]!),
-                  ),
-                  child: Column(
-                    children: [
-                      _buildEnhancedInfoRow(
-                        Icons.location_on_rounded,
-                        'Distance',
-                        '${distance.toStringAsFixed(1)} km away',
-                        const Color(0xFF4285F4),
-                      ),
-                      const Divider(height: 24, color: Colors.grey),
-                      _buildEnhancedInfoRow(
-                        Icons.people_rounded,
-                        'Total Capacity',
-                        '${shelter.capacity} people',
-                        const Color(0xFF9C27B0),
-                      ),
-                      const Divider(height: 24, color: Colors.grey),
-                      _buildEnhancedInfoRow(
-                        Icons.group_rounded,
-                        'Currently Occupied',
-                        '${shelter.currentOccupancy} people',
-                        const Color(0xFFFF5722),
-                      ),
-                      const Divider(height: 24, color: Colors.grey),
-                      _buildEnhancedInfoRow(
-                        Icons.meeting_room_rounded,
-                        'Available Spaces',
-                        '${shelter.capacity - shelter.currentOccupancy} spaces',
-                        const Color(0xFF4CAF50),
-                      ),
-                    ],
-                  ),
-                ),
-
-                const SizedBox(height: 20),
-
-                Container(
-                  padding: const EdgeInsets.all(20),
-                  decoration: BoxDecoration(
-                    color: Colors.grey[800],
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(color: Colors.grey[700]!),
-                  ),
-                  child: Row(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(8),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFE91E63).withOpacity(0.2),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: const Icon(
-                          Icons.place_rounded,
-                          color: Color(0xFFE91E63),
-                          size: 20,
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Text(
-                              'Address',
-                              style: TextStyle(
-                                fontSize: 14,
-                                color: Colors.grey,
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              shelter.address,
-                              style: const TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.w600,
-                                color: Colors.white,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-
-                if (shelter.contactNumber.isNotEmpty) ...[
-                  const SizedBox(height: 16),
-                  Container(
-                    padding: const EdgeInsets.all(20),
-                    decoration: BoxDecoration(
-                      color: Colors.grey[800],
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(color: Colors.grey[700]!),
-                    ),
-                    child: Row(
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.all(8),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFF00BCD4).withOpacity(0.2),
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: const Icon(
-                            Icons.phone_rounded,
-                            color: Color(0xFF00BCD4),
-                            size: 20,
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const Text(
-                                'Contact',
-                                style: TextStyle(
-                                  fontSize: 14,
-                                  color: Colors.grey,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-                              const SizedBox(height: 4),
-                              Text(
-                                shelter.contactNumber,
-                                style: const TextStyle(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.w600,
-                                  color: Colors.white,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-
-                if (shelter.amenities.isNotEmpty) ...[
-                  const SizedBox(height: 20),
-                  Container(
-                    padding: const EdgeInsets.all(20),
-                    decoration: BoxDecoration(
-                      color: Colors.grey[800],
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(color: Colors.grey[700]!),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Row(
-                          children: [
-                            Icon(
-                              Icons.apartment_rounded,
-                              color: Color(0xFFFFC107),
-                              size: 20,
-                            ),
-                            SizedBox(width: 8),
-                            Text(
-                              'Amenities',
-                              style: TextStyle(
-                                fontWeight: FontWeight.bold,
-                                fontSize: 16,
-                                color: Colors.white,
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 12),
-                        Wrap(
-                          spacing: 8,
-                          runSpacing: 8,
-                          children: shelter.amenities
-                              .map(
-                                (amenity) => Container(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 12,
-                                    vertical: 8,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    color: const Color(
-                                      0xFF4285F4,
-                                    ).withOpacity(0.2),
-                                    borderRadius: BorderRadius.circular(12),
-                                    border: Border.all(
-                                      color: const Color(
-                                        0xFF4285F4,
-                                      ).withOpacity(0.3),
-                                    ),
-                                  ),
-                                  child: Text(
-                                    amenity,
-                                    style: const TextStyle(
-                                      fontSize: 12,
-                                      color: Color(0xFF4285F4),
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                  ),
-                                ),
-                              )
-                              .toList(),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-
-                const SizedBox(height: 24),
-
-                Row(
-                  children: [
-                    Expanded(
-                      child: ElevatedButton.icon(
-                        onPressed: () {
-                          Navigator.pop(context);
-                          _getDirectionsToShelter(shelter);
-                        },
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFF4285F4),
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(vertical: 16),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          elevation: 2,
-                        ),
-                        icon: const Icon(Icons.directions_rounded),
-                        label: const Text(
-                          'Get Directions',
-                          style: TextStyle(fontWeight: FontWeight.w600),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    if (shelter.contactNumber.isNotEmpty)
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          onPressed: () {
-                            Navigator.pop(context);
-                            _callShelter(shelter);
-                          },
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: Colors.white,
-                            side: BorderSide(color: Colors.grey[600]!),
-                            padding: const EdgeInsets.symmetric(vertical: 16),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                          ),
-                          icon: const Icon(Icons.phone_rounded),
-                          label: const Text(
-                            'Call Shelter',
-                            style: TextStyle(fontWeight: FontWeight.w600),
-                          ),
-                        ),
-                      ),
-                  ],
-                ),
-
-                SizedBox(height: MediaQuery.of(context).padding.bottom + 16),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildEnhancedInfoRow(
-    IconData icon,
-    String label,
-    String value,
-    Color iconColor,
-  ) {
-    return Row(
-      children: [
-        Container(
-          padding: const EdgeInsets.all(8),
-          decoration: BoxDecoration(
-            color: iconColor.withOpacity(0.2),
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Icon(icon, size: 20, color: iconColor),
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                label,
-                style: const TextStyle(
-                  fontSize: 14,
-                  color: Colors.grey,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                value,
-                style: const TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600,
-                  color: Colors.white,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-
   void _sendHelpRequest() {
     // Only send help request if emergency features are active
     if (!_areEmergencyFeaturesActive) {
@@ -2203,19 +1350,4 @@ class _HomescreenState extends ConsumerState<Homescreen>
           print("Permission request error: $permissionError");
         });
   }
-
-  void _getDirectionsToShelter(ShelterModel shelter) {
-    print(
-      'Getting directions to ${shelter.name} at ${shelter.latitude}, ${shelter.longitude}',
-    );
-    final url =
-        'https://www.google.com/maps/dir/?api=1&destination=${shelter.latitude},${shelter.longitude}';
-    launchUrl(Uri.parse(url));
-  }
-
-  void _callShelter(ShelterModel shelter) {
-    print('Calling ${shelter.name} at ${shelter.contactNumber}');
-    final url = 'tel:${shelter.contactNumber}';
-    launchUrl(Uri.parse(url));
-  }
-}
+    }
