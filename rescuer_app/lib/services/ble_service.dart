@@ -1,6 +1,7 @@
 // TODO Implement this library.
 import 'dart:async';
 import 'dart:math';
+import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_reactive_ble/flutter_reactive_ble.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -78,6 +79,34 @@ class BleService {
   static const String serviceUuid = "12345678-1234-1234-1234-123456789ABC";
   static const String characteristicUuid = "12345678-1234-1234-1234-123456789ABD";
 
+  /// Check if Bluetooth is enabled
+  Future<bool> isBluetoothEnabled() async {
+    try {
+      debugPrint('Checking Bluetooth status...');
+      
+      // Get current BLE status
+      final status = _ble.status;
+      debugPrint('Current BLE status: $status');
+      
+      // BleStatus.ready means Bluetooth is on and ready to use
+      final isEnabled = status == BleStatus.ready;
+      debugPrint('Bluetooth enabled: $isEnabled');
+      
+      return isEnabled;
+    } catch (e) {
+      debugPrint('Error checking Bluetooth status: $e');
+      return false;
+    }
+  }
+
+  /// Get a stream of Bluetooth status changes
+  Stream<bool> get bluetoothStatusStream {
+    return _ble.statusStream.map((status) {
+      debugPrint('Bluetooth status changed: $status');
+      return status == BleStatus.ready;
+    });
+  }
+
   /// Initialize BLE service and request permissions
   Future<bool> initialize() async {
     try {
@@ -85,6 +114,13 @@ class BleService {
       
       // Request permissions first
       await _requestPermissions();
+      
+      // Check if Bluetooth is enabled first
+      final isBluetoothEnabled = await this.isBluetoothEnabled();
+      if (!isBluetoothEnabled) {
+        debugPrint('Bluetooth is not enabled');
+        return false;
+      }
       
       // Wait for BLE to be ready with a timeout
       try {
@@ -157,6 +193,13 @@ class BleService {
   /// Start scanning for victim beacons
   Future<void> startScanning() async {
     if (_isScanning) return;
+
+    // Check if Bluetooth is enabled before starting scan
+    final isEnabled = await isBluetoothEnabled();
+    if (!isEnabled) {
+      debugPrint('Cannot start scanning: Bluetooth is not enabled');
+      return;
+    }
 
     try {
       _isScanning = true;
@@ -398,7 +441,6 @@ class BleService {
     
     return null;
   }
-
 
   /// Note: flutter_reactive_ble doesn't support advertising
   /// For victim devices, you would need to use a different approach

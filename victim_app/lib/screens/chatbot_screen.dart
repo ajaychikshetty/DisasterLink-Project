@@ -6,7 +6,6 @@ import 'package:flutter_tts/flutter_tts.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:victim_app/bloc/chat_bloc.dart';
 import 'package:victim_app/models/ChatBot.dart';
-import 'package:victim_app/utils/constants.dart';
 
 class ChatBot extends StatefulWidget {
   const ChatBot({super.key});
@@ -19,8 +18,6 @@ class _ChatBotState extends State<ChatBot> with TickerProviderStateMixin {
   final ChatBloc chatBloc = ChatBloc();
   TextEditingController textEditingController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
-
-  String? _userImage;
 
   // Speech to Text
   late stt.SpeechToText _speech;

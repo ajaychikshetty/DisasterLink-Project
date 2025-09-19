@@ -51,6 +51,7 @@ dependencies:
   connectivity_plus: ^6.1.5
   flutter_reactive_ble: ^5.4.0
   flutter_map: ^8.2.1
+  android_intent_plus: ^6.0.0
   
 dev_dependencies:
   flutter_test:

@@ -12,7 +12,7 @@ import 'package:victim_app/screens/shelter_screen.dart';
 import 'package:victim_app/screens/signup_screen.dart';
 
 final GoRouter router = GoRouter(
-  initialLocation: '/home',
+  initialLocation: '/landing',
   routes: <RouteBase>[
     GoRoute(
       path: '/',

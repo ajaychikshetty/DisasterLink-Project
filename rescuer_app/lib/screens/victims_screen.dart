@@ -3,7 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:rescuer_app/widgets/bottom_navbar.dart';
 import 'package:rescuer_app/providers/ble_provider.dart';
 import 'package:rescuer_app/services/ble_service.dart';
-import 'package:rescuer_app/utils/ble_test_utils.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 class VictimsScreen extends ConsumerStatefulWidget {
   const VictimsScreen({super.key});
@@ -18,6 +18,9 @@ class _VictimsScreenState extends ConsumerState<VictimsScreen>
   late AnimationController _fadeController;
   late Animation<double> _pulseAnimation;
   late Animation<double> _fadeAnimation;
+  
+  bool _isBluetoothEnabled = false;
+  bool _isCheckingBluetooth = true;
 
   @override
   void initState() {
@@ -40,9 +43,9 @@ class _VictimsScreenState extends ConsumerState<VictimsScreen>
       CurvedAnimation(parent: _fadeController, curve: Curves.easeOut),
     );
 
-    // Initialize BLE service when screen loads
+    // Check Bluetooth status and initialize BLE service when screen loads
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _initializeBle();
+      _checkBluetoothStatus();
       _fadeController.forward();
     });
   }
@@ -52,6 +55,34 @@ class _VictimsScreenState extends ConsumerState<VictimsScreen>
     _pulseController.dispose();
     _fadeController.dispose();
     super.dispose();
+  }
+
+  Future<void> _checkBluetoothStatus() async {
+    setState(() {
+      _isCheckingBluetooth = true;
+    });
+
+    try {
+      final bleService = ref.read(bleServiceProvider);
+      final isEnabled = await bleService.isBluetoothEnabled();
+      
+      debugPrint('Bluetooth check result: $isEnabled');
+      
+      setState(() {
+        _isBluetoothEnabled = isEnabled;
+        _isCheckingBluetooth = false;
+      });
+
+      if (isEnabled) {
+        await _initializeBle();
+      }
+    } catch (e) {
+      debugPrint('Error checking Bluetooth status: $e');
+      setState(() {
+        _isBluetoothEnabled = false;
+        _isCheckingBluetooth = false;
+      });
+    }
   }
 
   Future<void> _initializeBle() async {
@@ -68,6 +99,33 @@ class _VictimsScreenState extends ConsumerState<VictimsScreen>
     }
   }
 
+  Future<void> _openBluetoothSettings() async {
+    try {
+      // First try to open Bluetooth settings directly
+      await openAppSettings();
+      
+      // Alternative method using intent (Android specific)
+      // You might need to add android_intent_plus package for this
+      /*
+      if (Platform.isAndroid) {
+        final AndroidIntent intent = AndroidIntent(
+          action: 'android.bluetooth.adapter.action.REQUEST_ENABLE',
+        );
+        await intent.launch();
+      }
+      */
+      
+      // Check again after a delay to see if Bluetooth was enabled
+      Future.delayed(const Duration(seconds: 2), () {
+        _checkBluetoothStatus();
+      });
+    } catch (e) {
+      debugPrint('Error opening Bluetooth settings: $e');
+      // Fallback to app settings
+      openAppSettings();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final victimsAsync = ref.watch(victimsStreamProvider);
@@ -81,31 +139,132 @@ class _VictimsScreenState extends ConsumerState<VictimsScreen>
       appBar: _buildAppBar(context),
       body: FadeTransition(
         opacity: _fadeAnimation,
-        child: bleInitialized.when(
-          data: (initialized) {
-            if (!initialized) {
-              return _buildErrorState('BLE not available. Please ensure:\n• Bluetooth is enabled\n• Location services are enabled\n• App has necessary permissions');
-            }
-            
-            return Column(
-              children: [
-                _buildEnhancedStatusCard(victimCount, nearestVictim, isScanning),
-                Expanded(
-                  child: victimsAsync.when(
-                    data: (victims) => _buildVictimsList(victims),
-                    loading: () => _buildLoadingState(),
-                    error: (error, stack) => _buildErrorState('Error: $error'),
-                  ),
+        child: _isCheckingBluetooth 
+          ? _buildLoadingState()
+          : !_isBluetoothEnabled
+            ? _buildBluetoothDisabledState()
+            : _buildMainContent(victimsAsync, isScanning, victimCount, nearestVictim),
+      ),
+      floatingActionButton: _isBluetoothEnabled ? _buildEnhancedFAB(isScanning) : null,
+      bottomNavigationBar: Bottom_NavBar(indexx: 2),
+    );
+  }
+
+  Widget _buildMainContent(AsyncValue victimsAsync, bool isScanning, int victimCount, VictimBeacon? nearestVictim) {
+    return Column(
+      children: [
+        _buildEnhancedStatusCard(victimCount, nearestVictim, isScanning),
+        Expanded(
+          child: victimsAsync.when(
+            data: (victims) => _buildVictimsList(victims),
+            loading: () => _buildScanningLoadingState(),
+            error: (error, stack) => _buildVictimScanError('Error: $error'),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildScanningLoadingState() {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Container(
+            width: 60,
+            height: 60,
+            decoration: BoxDecoration(
+              color: Colors.grey[900],
+              shape: BoxShape.circle,
+            ),
+            child: const CircularProgressIndicator(
+              color: Colors.redAccent,
+              strokeWidth: 3,
+            ),
+          ),
+          const SizedBox(height: 24),
+          Text(
+            'SCANNING FOR VICTIMS...',
+            style: TextStyle(
+              color: Colors.grey[400],
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+              letterSpacing: 1,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildVictimScanError(String message) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(24),
+              decoration: BoxDecoration(
+                color: Colors.orangeAccent.withOpacity(0.1),
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: Colors.orangeAccent.withOpacity(0.3),
+                  width: 2,
                 ),
-              ],
-            );
-          },
-          loading: () => _buildLoadingState(),
-          error: (error, stack) => _buildErrorState('Failed to initialize BLE'),
+              ),
+              child: const Icon(
+                Icons.warning_amber_outlined,
+                size: 48,
+                color: Colors.orangeAccent,
+              ),
+            ),
+            const SizedBox(height: 24),
+            Text(
+              'SCAN ERROR',
+              style: TextStyle(
+                color: Colors.orangeAccent,
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+                letterSpacing: 1,
+              ),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              message,
+              style: TextStyle(
+                color: Colors.grey[400],
+                fontSize: 14,
+                height: 1.5,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 24),
+            ElevatedButton(
+              onPressed: () async {
+                final bleService = ref.read(bleServiceProvider);
+                await bleService.startScanning();
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.orangeAccent,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+              ),
+              child: const Text(
+                'RETRY SCAN',
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 0.5,
+                ),
+              ),
+            ),
+          ],
         ),
       ),
-      floatingActionButton: _buildEnhancedFAB(isScanning),
-      bottomNavigationBar: Bottom_NavBar(indexx: 2),
     );
   }
 
@@ -145,6 +304,88 @@ class _VictimsScreenState extends ConsumerState<VictimsScreen>
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildBluetoothDisabledState() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(24),
+              decoration: BoxDecoration(
+                color: Colors.blueAccent.withOpacity(0.1),
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: Colors.blueAccent.withOpacity(0.3),
+                  width: 2,
+                ),
+              ),
+              child: const Icon(
+                Icons.bluetooth_disabled,
+                size: 48,
+                color: Colors.blueAccent,
+              ),
+            ),
+            const SizedBox(height: 24),
+            Text(
+              'BLUETOOTH DISABLED',
+              style: TextStyle(
+                color: Colors.blueAccent,
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+                letterSpacing: 1,
+              ),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'Bluetooth is required for victim detection.\nPlease enable Bluetooth to continue.',
+              style: TextStyle(
+                color: Colors.grey[400],
+                fontSize: 14,
+                height: 1.5,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 24),
+            ElevatedButton.icon(
+              onPressed: _openBluetoothSettings,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.blueAccent,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                elevation: 4,
+              ),
+              icon: const Icon(Icons.bluetooth, size: 20),
+              label: const Text(
+                'TURN ON BLUETOOTH',
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 0.5,
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            TextButton(
+              onPressed: _checkBluetoothStatus,
+              child: Text(
+                'REFRESH STATUS',
+                style: TextStyle(
+                  color: Colors.grey[400],
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 0.5,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -635,7 +876,7 @@ class _VictimsScreenState extends ConsumerState<VictimsScreen>
           ),
           const SizedBox(height: 24),
           Text(
-            'INITIALIZING BLE...',
+            'CHECKING BLUETOOTH...',
             style: TextStyle(
               color: Colors.grey[400],
               fontSize: 16,
@@ -877,18 +1118,35 @@ class _VictimsScreenState extends ConsumerState<VictimsScreen>
           mainAxisSize: MainAxisSize.min,
           children: [
             ListTile(
-              leading: const Icon(Icons.bluetooth, color: Colors.blueAccent),
+              leading: Icon(
+                Icons.bluetooth, 
+                color: _isBluetoothEnabled ? Colors.blueAccent : Colors.grey,
+              ),
               title: const Text('Bluetooth Status', style: TextStyle(color: Colors.white)),
-              subtitle: Text('Enabled', style: TextStyle(color: Colors.grey[400])),
+              subtitle: Text(
+                _isBluetoothEnabled ? 'Enabled' : 'Disabled', 
+                style: TextStyle(
+                  color: _isBluetoothEnabled ? Colors.greenAccent : Colors.redAccent,
+                ),
+              ),
+              trailing: !_isBluetoothEnabled ? IconButton(
+                onPressed: _openBluetoothSettings,
+                icon: const Icon(Icons.settings, color: Colors.blueAccent),
+              ) : null,
             ),
             ListTile(
               leading: const Icon(Icons.location_on, color: Colors.greenAccent),
               title: const Text('Location Services', style: TextStyle(color: Colors.white)),
-              subtitle: Text('Enabled', style: TextStyle(color: Colors.grey[400])),
+              subtitle: Text('Required for BLE', style: TextStyle(color: Colors.grey[400])),
             ),
           ],
         ),
         actions: [
+          if (!_isBluetoothEnabled)
+            TextButton(
+              onPressed: _openBluetoothSettings,
+              child: const Text('ENABLE BLUETOOTH'),
+            ),
           TextButton(
             onPressed: () => Navigator.of(context).pop(),
             child: const Text('CLOSE'),
