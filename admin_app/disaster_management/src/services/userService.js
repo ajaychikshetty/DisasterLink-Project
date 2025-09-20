@@ -1,5 +1,5 @@
 // The base URL for your FastAPI backend
-const API_URL = 'http://localhost:8000/api/users';
+const API_URL = 'http://localhost:5000/api/users';
 
 /**
  * Fetches all users from the API.

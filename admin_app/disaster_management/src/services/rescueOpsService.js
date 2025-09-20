@@ -1,4 +1,4 @@
-const API_BASE = 'http://localhost:8000/api/rescue-ops/teams'; // adjust to your backend URL
+const API_BASE = 'http://localhost:5000/api/rescue-ops/teams'; // adjust to your backend URL
 
 export async function getRescueTeams() {
   const res = await fetch(`${API_BASE}`);

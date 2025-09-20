@@ -1,4 +1,4 @@
-const API_URL = 'http://localhost:8000/api/shelters';
+const API_URL = 'http://localhost:5000/api/shelters';
 
 // Fetch all shelters
 export const getShelters = async () => {

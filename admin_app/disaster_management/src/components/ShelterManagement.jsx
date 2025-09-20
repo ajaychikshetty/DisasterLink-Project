@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from "react";
+import axios from "axios";
 import {
   Plus,
   Building,
@@ -10,10 +11,10 @@ import {
 } from "lucide-react";
 import * as shelterService from "../services/shelterService";
 import SlideInForm from "./SlideInForm";
+import * as userService from "../services/userService";
+import Autosuggest from "react-autosuggest";
 
-
-
-import * as userService from "../services/userService"; 
+// Shelter Occupants Panel (unchanged)
 const ShelterOccupantsPanel = ({ isOpen, onClose, shelter }) => {
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -21,7 +22,6 @@ const ShelterOccupantsPanel = ({ isOpen, onClose, shelter }) => {
   useEffect(() => {
     if (isOpen && shelter?.rescuedMembers?.length) {
       setLoading(true);
-      // Fetch details of each rescued member
       Promise.all(
         shelter.rescuedMembers.map((userId) => userService.getUser(userId))
       )
@@ -69,18 +69,83 @@ const ShelterOccupantsPanel = ({ isOpen, onClose, shelter }) => {
   );
 };
 
+// Address input with OpenStreetMap autocomplete
+const AddressInput = ({ formData, setFormData }) => {
+  const [suggestions, setSuggestions] = useState([]);
 
+  const fetchSuggestions = async (value) => {
+    if (!value) {
+      setSuggestions([]);
+      return;
+    }
 
+    try {
+      const res = await axios.get(
+        `https://nominatim.openstreetmap.org/search?countrycodes=IN&q=${encodeURIComponent(
+          value
+        )}&format=json&addressdetails=1&limit=5`
+      );
+      setSuggestions(res.data);
+    } catch (err) {
+      console.error(err);
+    }
+  };
 
+  const getSuggestionValue = (suggestion) => suggestion.display_name;
+
+  const onSuggestionSelected = (event, { suggestion }) => {
+    setFormData({
+      ...formData,
+      address: suggestion.display_name,
+      latitude: suggestion.lat,
+      longitude: suggestion.lon,
+    });
+  };
+
+  const onSuggestionsClearRequested = () => setSuggestions([]);
+
+  const inputProps = {
+    placeholder: "Enter address",
+    value: formData.address,
+    onChange: (e, { newValue }) =>
+      setFormData({ ...formData, address: newValue }),
+    className: "w-full p-2 rounded bg-gray-700 text-white",
+  };
+
+  const theme = {
+    container: { position: "relative" },
+    suggestionsContainer: "absolute z-10 bg-gray-800 rounded shadow-lg w-full",
+    suggestion: "p-2 cursor-pointer text-white hover:bg-gray-600 flex justify-between items-center",
+    suggestionHighlighted: "bg-gray-600",
+  };
+
+  return (
+    <Autosuggest
+      suggestions={suggestions}
+      onSuggestionsFetchRequested={({ value }) => fetchSuggestions(value)}
+      onSuggestionsClearRequested={onSuggestionsClearRequested}
+      getSuggestionValue={getSuggestionValue}
+      renderSuggestion={(suggestion) => (
+        <div className="flex justify-between items-center">
+          <span>{suggestion.display_name}</span>
+          <span className="text-gray-400">&#8594;</span>
+        </div>
+      )}
+      onSuggestionSelected={onSuggestionSelected}
+      inputProps={inputProps}
+      theme={theme}
+    />
+  );
+};
+
+// Main Shelter Management Component
 const ShelterManagement = () => {
   const [shelters, setShelters] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
-
   const [isFormVisible, setIsFormVisible] = useState(false);
   const [editingShelter, setEditingShelter] = useState(null);
-
-  const [selectedShelter, setSelectedShelter] = useState(null); // for occupants panel
+  const [selectedShelter, setSelectedShelter] = useState(null);
 
   const [formData, setFormData] = useState({
     name: "",
@@ -93,7 +158,6 @@ const ShelterManagement = () => {
     amenities: "",
   });
 
-  // fetch shelters
   const fetchShelters = useCallback(async () => {
     try {
       setIsLoading(true);
@@ -110,7 +174,6 @@ const ShelterManagement = () => {
     fetchShelters();
   }, [fetchShelters]);
 
-  // populate form for edit
   useEffect(() => {
     if (editingShelter) {
       setFormData({
@@ -137,7 +200,6 @@ const ShelterManagement = () => {
     }
   }, [editingShelter]);
 
-  // save shelter
   const handleSaveShelter = async (e) => {
     e.preventDefault();
     try {
@@ -169,7 +231,6 @@ const ShelterManagement = () => {
     }
   };
 
-  // delete shelter
   const handleDeleteShelter = async (shelterId) => {
     if (window.confirm("Are you sure you want to delete this shelter?")) {
       try {
@@ -203,22 +264,20 @@ const ShelterManagement = () => {
         </button>
       </div>
 
-      {/* Loading */}
+      {/* Loading and Error */}
       {isLoading && (
         <div className="bg-gray-800 rounded-xl p-8 text-center">
           <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-500"></div>
           <p className="text-gray-400 mt-2">Loading shelters...</p>
         </div>
       )}
-
-      {/* Error */}
       {error && (
         <div className="bg-red-900/50 border border-red-500 rounded-xl p-4">
-        <div className="flex items-center gap-2 text-red-400">
-          <AlertCircle size={20} />
-          <span>Error: {error}</span>
+          <div className="flex items-center gap-2 text-red-400">
+            <AlertCircle size={20} />
+            <span>Error: {error}</span>
+          </div>
         </div>
-      </div>
       )}
 
       {/* Shelter list */}
@@ -229,7 +288,6 @@ const ShelterManagement = () => {
               key={shelter.id}
               className="bg-gray-800 rounded-xl p-6 hover:bg-gray-750 transition-colors"
             >
-              {/* Top row */}
               <div className="flex items-start justify-between mb-4">
                 <div className="flex items-center gap-3">
                   <div className="w-10 h-10 bg-green-600 rounded-full flex items-center justify-center">
@@ -266,8 +324,6 @@ const ShelterManagement = () => {
                   </button>
                 </div>
               </div>
-
-              {/* Occupancy */}
               <div className="space-y-3">
                 <div className="flex justify-between items-center">
                   <span className="text-gray-400">Occupancy</span>
@@ -285,16 +341,12 @@ const ShelterManagement = () => {
                     }}
                   ></div>
                 </div>
-
-                {/* Location */}
                 <div className="flex items-center gap-1 text-gray-400 text-sm">
                   <MapPin size={12} />
                   <span>
                     {shelter.latitude?.toFixed(4)}, {shelter.longitude?.toFixed(4)}
                   </span>
                 </div>
-
-                {/* Contact */}
                 <p className="text-sm text-gray-400">📞 {shelter.contactNumber}</p>
               </div>
             </div>
@@ -309,16 +361,16 @@ const ShelterManagement = () => {
         title={editingShelter ? "Edit Shelter" : "Create New Shelter"}
       >
         <form onSubmit={handleSaveShelter} className="space-y-4">
-          {/* name */}
           <input
             type="text"
             placeholder="Shelter Name"
             value={formData.name}
-            onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+            onChange={(e) =>
+              setFormData({ ...formData, name: e.target.value })
+            }
             className="w-full p-2 rounded bg-gray-700 text-white"
             required
           />
-          {/* capacity */}
           <input
             type="number"
             placeholder="Capacity"
@@ -329,17 +381,7 @@ const ShelterManagement = () => {
             className="w-full p-2 rounded bg-gray-700 text-white"
             required
           />
-          {/* address */}
-          <input
-            type="text"
-            placeholder="Address"
-            value={formData.address}
-            onChange={(e) =>
-              setFormData({ ...formData, address: e.target.value })
-            }
-            className="w-full p-2 rounded bg-gray-700 text-white"
-          />
-          {/* contact */}
+          <AddressInput formData={formData} setFormData={setFormData} />
           <input
             type="text"
             placeholder="Contact Number"
@@ -349,7 +391,6 @@ const ShelterManagement = () => {
             }
             className="w-full p-2 rounded bg-gray-700 text-white"
           />
-          {/* description */}
           <textarea
             placeholder="Description"
             value={formData.description}
@@ -359,7 +400,6 @@ const ShelterManagement = () => {
             className="w-full p-2 rounded bg-gray-700 text-white"
             rows={3}
           />
-          {/* amenities */}
           <input
             type="text"
             placeholder="Amenities (comma separated)"
@@ -369,29 +409,6 @@ const ShelterManagement = () => {
             }
             className="w-full p-2 rounded bg-gray-700 text-white"
           />
-          {/* latitude */}
-          <input
-            type="number"
-            step="any"
-            placeholder="Latitude"
-            value={formData.latitude}
-            onChange={(e) =>
-              setFormData({ ...formData, latitude: e.target.value })
-            }
-            className="w-full p-2 rounded bg-gray-700 text-white"
-          />
-          {/* longitude */}
-          <input
-            type="number"
-            step="any"
-            placeholder="Longitude"
-            value={formData.longitude}
-            onChange={(e) =>
-              setFormData({ ...formData, longitude: e.target.value })
-            }
-            className="w-full p-2 rounded bg-gray-700 text-white"
-          />
-
           <button
             type="submit"
             className="w-full bg-indigo-600 hover:bg-indigo-700 text-white py-2 rounded-lg"
@@ -412,3 +429,4 @@ const ShelterManagement = () => {
 };
 
 export default ShelterManagement;
+

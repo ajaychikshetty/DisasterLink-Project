@@ -2,7 +2,7 @@ import 'leaflet/dist/leaflet.css';
 
 import 'leaflet/dist/leaflet.css';
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { 
+import {
   Menu, X, Home, Map, Users, Shield, UserCheck, Building,
   Bell, User, Search, Plus, Edit, Trash2, MapPin, Phone,
   Calendar, Activity, ChevronRight, AlertCircle, CheckCircle,
@@ -15,6 +15,7 @@ import DashboardOverview from './components/DashboardOverview';
 import ShelterManagement from './components/ShelterManagement';
 import RescueOpsDashboard from './components/RescueOpsDashboard';
 import MapDashboard from './components/MapDashboard';
+import MessageMangement from './components/MessageManagement';
 
 import * as shelterService from './services/shelterService';
 import * as rescuerService from './services/rescuerService';
@@ -27,6 +28,16 @@ import SlideInForm from './components/SlideInForm';
 
 // Main App Component with Navigation
 const App = () => {
+  const token = localStorage.getItem("idToken");
+
+  if (!token) {
+    window.location.href = "/";
+    return null;
+  }
+  const handleLogout = () => {
+    localStorage.removeItem("idToken"); // remove token
+    window.location.href = "/";          // redirect to login
+  };
   const [activeTab, setActiveTab] = useState(() => {
     return localStorage.getItem('activeTab') || 'dashboard';
   });
@@ -43,6 +54,7 @@ const App = () => {
     { id: 'rescuers', name: 'Rescuers', icon: Shield },
     { id: 'teams', name: 'Rescue Teams', icon: UserCheck },
     { id: 'shelters', name: 'Shelters', icon: Building },
+    { id: 'messages', name: 'Messages', icon: Bell },
   ];
 
   const renderContent = () => {
@@ -59,6 +71,8 @@ const App = () => {
         return <RescueOpsDashboard />;
       case 'shelters':
         return <ShelterManagement />;
+      case 'messages':  
+        return <MessageMangement />;
       default:
         return <DashboardOverview />;
     }
@@ -99,11 +113,10 @@ const App = () => {
                     setActiveTab(item.id);
                     setSidebarOpen(false);
                   }}
-                  className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors mb-1 ${
-                    activeTab === item.id
+                  className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors mb-1 ${activeTab === item.id
                       ? 'bg-indigo-600 text-white'
                       : 'text-gray-300 hover:bg-gray-700 hover:text-white'
-                  }`}
+                    }`}
                 >
                   <Icon size={20} />
                   {item.name}
@@ -157,9 +170,15 @@ const App = () => {
               <Bell size={20} />
               <span className="absolute -top-1 -right-1 w-3 h-3 bg-red-500 rounded-full"></span>
             </button>
-            <div className="w-8 h-8 bg-indigo-600 rounded-full flex items-center justify-center">
+            {/* <div className="w-8 h-8 bg-indigo-600 rounded-full flex items-center justify-center">
               <User size={16} className="text-white" />
-            </div>
+            </div> */}
+            <button
+              onClick={handleLogout}
+              className="bg-red-600 hover:bg-red-700 px-4 py-2 rounded-lg"
+            >
+              Logout
+            </button>
           </div>
         </header>
 
@@ -297,7 +316,7 @@ export default App;
 //   const [geoData, setGeoData] = useState(null);
 
 //   useEffect(() => {
-//     fetch("http://localhost:8000/api/map/mumbai-map")
+//     fetch("http://localhost:5000/api/map/mumbai-map")
 //       .then((res) => res.json())
 //       .then((data) => setGeoData(data));
 //   }, []);

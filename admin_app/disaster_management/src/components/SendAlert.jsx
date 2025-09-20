@@ -8,7 +8,7 @@ const AlertSender = () => {
   const sendAlert = async () => {
     const numbersArray = numbers.split(",").map(n => n.trim()).filter(Boolean);
     try {
-      const res = await fetch("http://localhost:8000/disaster_alert", {
+      const res = await fetch("http://localhost:5000/disaster_alert", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
