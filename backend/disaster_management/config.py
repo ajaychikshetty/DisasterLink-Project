@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     FIREBASE_COLLECTION_SHELTERS: str = "shelters"
     FIREBASE_COLLECTION_LOGS: str = "rescue_logs"
     FIREBASE_COLLECTION_INCIDENTS: str = "incidents"
-    FIREBASE_COLLECTION_MESSAGES: str = "messages"
+    FIREBASE_COLLECTION_MESSAGES: str = "Messages"
     FIREBASE_COLLECTION_Admins: str = "admins"
 
     # Twilio (optional)

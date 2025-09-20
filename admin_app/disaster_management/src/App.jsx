@@ -15,6 +15,7 @@ import DashboardOverview from './components/DashboardOverview';
 import ShelterManagement from './components/ShelterManagement';
 import RescueOpsDashboard from './components/RescueOpsDashboard';
 import MapDashboard from './components/MapDashboard';
+import MessageMangement from './components/MessageManagement';
 
 import * as shelterService from './services/shelterService';
 import * as rescuerService from './services/rescuerService';
@@ -53,6 +54,7 @@ const App = () => {
     { id: 'rescuers', name: 'Rescuers', icon: Shield },
     { id: 'teams', name: 'Rescue Teams', icon: UserCheck },
     { id: 'shelters', name: 'Shelters', icon: Building },
+    { id: 'messages', name: 'Messages', icon: Bell },
   ];
 
   const renderContent = () => {
@@ -69,6 +71,8 @@ const App = () => {
         return <RescueOpsDashboard />;
       case 'shelters':
         return <ShelterManagement />;
+      case 'messages':  
+        return <MessageMangement />;
       default:
         return <DashboardOverview />;
     }
