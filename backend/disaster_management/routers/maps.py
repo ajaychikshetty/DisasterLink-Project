@@ -67,7 +67,8 @@ STATIC_DIR = os.path.join(BASE_DIR, "../static")
 
 @router.get("/mumbai-map")
 async def get_mumbai_map():
-    file_path = os.path.join(STATIC_DIR, "mumbai-wards-map.geojson")
+    # file_path = os.path.join(STATIC_DIR, "mumbai-wards-map.geojson")
+    file_path = os.path.join(STATIC_DIR, "mergedfile.geojson")
     if os.path.exists(file_path):
         return FileResponse(file_path, media_type="application/geo+json")
     return {"error": "File not found"}

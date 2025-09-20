@@ -63,12 +63,13 @@ const App = () => {
         return <DashboardOverview />;
       case 'map':
         return <MapDashboard />;
-      case 'users':
-        return <UserManagement />;
-      case 'rescuers':
-        return <RescuerManagement />;
-      case 'teams':
-        return <RescueOpsDashboard />;
+        case 'users':
+          return <UserManagement />;
+          case 'rescuers':
+            return <RescuerManagement />;
+          case 'teams':
+            // return <MapDashboard />;
+            return <RescueOpsDashboard />;
       case 'shelters':
         return <ShelterManagement />;
       case 'messages':  

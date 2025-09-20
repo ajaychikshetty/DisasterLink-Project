@@ -6,7 +6,6 @@ from flask import json
 import requests
 from fastapi import APIRouter, HTTPException, Form
 from fastapi.responses import PlainTextResponse
-from services.sms_handler import handle_sms_command
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
@@ -103,44 +102,44 @@ def send_REPLY(to: str, lat: float, lon: float, type: int):
             
 
 
-@router.post("/receive_sms")
-async def receive_sms(data: dict):
-    print(f"📥 Incoming SMS from {data.get('from')}: {data.get('msg')}")
+# @router.post("/receive_sms")
+# async def receive_sms(data: dict):
+#     print(f"📥 Incoming SMS from {data.get('from')}: {data.get('msg')}")
 
-    # Extract fields from incoming data
-    message_text = data.get("msg", "")
-    sender = data.get("from", "")
-    match = re.search(r'\{.*\}$', message_text)   # matches from { to end of string
-    if match:
-        json_str = match.group(0)
-        data = json.loads(json_str)
-        latitude=data['lat']
-        longitude=data['lon']
+#     # Extract fields from incoming data
+#     message_text = data.get("msg", "")
+#     sender = data.get("from", "")
+#     match = re.search(r'\{.*\}$', message_text)   # matches from { to end of string
+#     if match:
+#         json_str = match.group(0)
+#         data = json.loads(json_str)
+#         latitude=data['lat']
+#         longitude=data['lon']
 
-        # Create GeoPoint object
-        location = firestore.GeoPoint(latitude, longitude) if latitude and longitude else None
+#         # Create GeoPoint object
+#         location = firestore.GeoPoint(latitude, longitude) if latitude and longitude else None
 
-        # Prepare document data
-        doc_data = {
-            "Message": data['msg'],
-            "Sender": sender,
-            "Timestamp": firestore.SERVER_TIMESTAMP ,
-            "Type": int(data['sos']),
-            "Battery": data['bat'],
-            "location": location
-        }
+#         # Prepare document data
+#         doc_data = {
+#             "Message": data['msg'],
+#             "Sender": sender,
+#             "Timestamp": firestore.SERVER_TIMESTAMP ,
+#             "Type": int(data['sos']),
+#             "Battery": data['bat'],
+#             "location": location
+#         }
 
-        # Add document to 'Messages' collection
-        db.collection("Messages").add(doc_data)
-        send_REPLY(sender,latitude,longitude,int(data['sos']))
-        return {"status": "received"}
-    else:
-        print("No JSON found in the message.")
+#         # Add document to 'Messages' collection
+#         db.collection("Messages").add(doc_data)
+#         send_REPLY(sender,latitude,longitude,int(data['sos']))
+#         return {"status": "received"}
+#     else:
+#         print("No JSON found in the message.")
 
 
     
 
-    # return {"status": "received"}
+#     # return {"status": "received"}
 
 # ✅ Simple HTML Form to send SMS
 @router.get("/test-sms", response_class=HTMLResponse)
@@ -204,7 +203,7 @@ async def sendAlert(alert: DisasterAlertRequest):
     Receives a disaster name and list of phone numbers,
     sends an alert message to all numbers via send_sms.
     """
-    msg = f"⚠️ Disaster Alert: {alert.disaster_name}\nStay safe and follow instructions."
+    msg = f"DISASTERLINKx9040 {alert.disaster_name}\nStay safe and follow instructions."
     print(alert.numbers)
     print(alert.disaster_name)
     results = []
@@ -218,3 +217,248 @@ async def sendAlert(alert: DisasterAlertRequest):
         "message": msg,
         "results": results
     }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# sms_handler.py
+import json
+from pydantic import ValidationError
+from schemas.common import Location
+from schemas.incident import IncidentCreate
+from services import user_service, incident_service 
+from routers.users import get_user_by_phone
+
+from routers.victims import update_victim_location, updateStatus
+from routers.rescuers import update_rescuer_location
+from routers.shelters import add_member_to_shelter
+# from routers.rescue_ops import sendVictimListToTeamMember
+
+
+
+
+@router.post("/receive_sms")
+def receive_sms(body: dict):
+    """
+    Parses and routes an incoming SMS command to the correct service.
+    Returns the text for the reply SMS.
+    """
+    try:
+        print("body:", body)
+        # Extract the inner JSON from the 'msg' field
+        msg_field = body.get("msg", "")
+        match = re.search(r'\{.*\}$', msg_field)
+        if match:
+            inner_json = match.group(0)
+            payload = json.loads(inner_json)
+            command = payload.get("msg", "")
+            print("----------------------------------------------------------")
+            print("command:", command)
+            print(command == "User Location update")
+        else:
+            print("No JSON found in the message.")
+            payload = {}
+            command = ""
+        from_phone = body.get("from", "")
+    except (ValueError, json.JSONDecodeError):
+        print("Invalid command format. Use: COMMAND {\"json\": \"payload\"}")
+
+    # First, identify the user sending the SMS
+    # user = get_user_by_phone(from_phone)
+    # if not user:
+    #     return "Your phone number is not registered with the system. Cannot process request."
+
+    # Route command to the appropriate logic
+    # if command == "USER_STATUS_UPDATE":
+    #     try:
+    #         status = payload["status"]
+    #         location = Location.model_validate(payload["location"])
+    #         user_service.update_user_status_and_location(user['userId'], status, location)
+    #         return f"Success! Your status has been updated to '{status}'."
+    #     except (ValidationError, KeyError) as e:
+    #         return f"Error: Invalid data for STATUS_UPDATE. Details: {e}"
+
+    # elif command == "INCIDENT_REPORT":
+    #     try:
+    #         # Add the user's ID to the incident report
+    #         payload["reportedBy"] = user['userId']
+    #         incident_data = IncidentCreate.model_validate(payload)
+    #         new_incident = incident_service.create_new_incident(incident_data)
+    #         return f"Incident reported successfully. Your incident ID is {new_incident.incidentId}."
+    #     except (ValidationError, KeyError) as e:
+    #         return f"Error: Invalid data for INCIDENT_REPORT. Details: {e}"
+        
+
+    if command == "User Location update":
+        print("inside user location update")
+        # params: update_victim_location(lat: float, lon: float, msg: str, bat: int, time: str, phone: str):            
+        update_victim_location(
+            lat=payload.get("lat"),
+            lon=payload.get("lon"),
+            bat=payload.get("bat"),
+            phone=from_phone
+        )
+ 
+    elif command == "Rescuer location update":
+        print("inside rescuer location update")
+        # params: update_rescuer_location(lat: float, lon: float, msg: str, bat: int, time: str, id: str):
+        update_rescuer_location(
+            lat=payload.get("lat"),
+            lon=payload.get("lon"),
+            id=payload.get("rescuer_email")
+
+        )
+
+    elif command == "201": # add member to shelter
+        # params: addUserToShelter(shelterId: str, phone: str):
+        add_member_to_shelter(
+            shelterId=payload.get("shelterId"),
+            memberId=from_phone
+        )
+
+    elif command == "sos": # remove member from shelter
+        # create a message in the Messages collection with Type = 101
+        lat = payload.get("lat")
+        lon = payload.get("lon")
+        location = firestore.GeoPoint(lat, lon)
+        message = {
+            "Message": "SOS Alert",
+            "Sender": from_phone,
+            "Timestamp": datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=5, minutes=30))).isoformat(),  # IST timestamp
+            "Type": 101,
+            "Battery": payload.get("bat"),
+            "location": location
+        }
+
+        # Ensure Firestore client is used
+        firestore_client = firestore.client()
+        firestore_client.collection("Messages").add(message)
+
+        # send shelter info reply
+        # send
+        base_msg = "DISASTERLINKx9040 101 !\n"
+
+        # Construct user location
+        user_loc = firestore.GeoPoint(lat, lon)
+        top3 = get_nearest_shelters(user_loc)
+
+        # Format shelters info as readable plain text
+        shelters_lines = []
+        for shelter in top3:
+            line = f"{shelter['name']} {round(shelter['distance_km'], 2)} km, {shelter.get('latitude','N/A')},{shelter.get('longitude','N/A')}, {shelter.get('contactNumber','N/A')}"
+            shelters_lines.append(line)
+
+        # Combine into final message
+        final_msg = base_msg + "Nearest shelters:\n" + "\n".join(shelters_lines)
+        print(final_msg)
+
+        # Send SMS
+        send_sms(from_phone, final_msg)
+
+        # Optionally, return dict for logging
+        return {
+            "msg": base_msg.strip(),
+            "nearest_shelters": top3
+        }
+    
+    elif command == "victim is unconscious":
+        # get the user using from number and then update the status field to critical
+        # trim leading +
+        updateStatus(phone=from_phone, status="Critical")
+        # if from_phone.startswith("+"):
+        
+
+        
+      
+        
+
+    # elif command == "1":
+        # params: sendVictimListToTeamMember(rescuerId: str):
+        # sendVictimListToTeamMember(
+        #     rescuerId=from_phone
+        # )
+
+    # elif command == "SEND_NEAREST_SHELTER":
+    #     message_text = payload.get("msg", "")
+    #     sender = from_phone
+    #     match = re.search(r'\{.*\}$', message_text)   # matches from { to end of string
+    #     if match:
+    #         json_str = match.group(0)
+    #         data = json.loads(json_str)
+    #         latitude = data['lat']
+    #         longitude = data['lon']
+
+    #         # Create GeoPoint object
+    #         location = firestore.GeoPoint(latitude, longitude) if latitude and longitude else None
+
+    #         # Prepare document data
+    #         doc_data = {
+    #             "Message": data['msg'],
+    #             "Sender": sender,
+    #             "Timestamp": firestore.SERVER_TIMESTAMP,
+    #             "Type": int(data['sos']),
+    #             "Battery": data['bat'],
+    #             "location": location
+    #         }
+
+    #         # Add document to 'Messages' collection
+    #         db.collection("Messages").add(doc_data)
+    #         send_REPLY(sender, latitude, longitude, int(data['sos']))
+    #         return {"status": "received"}
+    #     else:
+    #         print("No JSON found in the message.")
+    #     longitude=data['lon']
+
+    #     # Create GeoPoint object
+    #     location = firestore.GeoPoint(latitude, longitude) if latitude and longitude else None
+
+    #     # Prepare document data
+    #     doc_data = {
+    #         "Message": data['msg'],
+    #         "Sender": sender,
+    #         "Timestamp": firestore.SERVER_TIMESTAMP ,
+    #         "Type": int(data['sos']),
+    #         "Battery": data['bat'],
+    #         "location": location
+    #     }
+
+    #     # Add document to 'Messages' collection
+    #     db.collection("Messages").add(doc_data)
+    #     send_REPLY(sender,latitude,longitude,int(data['sos']))
+    #     return {"status": "received"}
+    # else:
+    #     print("No JSON found in the message.")
+
+
+
+    
+
+
+    # SEND NEAREST SHELTER ID, with list of users in that particular area when team is assigned
+
+
+
+    else:
+        print(f"Unknown command: {command}.")

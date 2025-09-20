@@ -1,3 +1,4 @@
+// src/components/MapDashboard.jsx
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import {
   MapContainer,
@@ -7,6 +8,8 @@ import {
   GeoJSON,
   useMap,
   Rectangle,
+  Polyline,
+  useMapEvents,
 } from "react-leaflet";
 import L from "leaflet";
 import "leaflet.heat";
@@ -15,60 +18,57 @@ import booleanPointInPolygon from "@turf/boolean-point-in-polygon";
 import { point as turfPoint } from "@turf/helpers";
 
 import { getShelters } from "../services/shelterService";
-import { getRescueTeams } from "../services/rescueOpsService";
-// Import the new alert service along with getMessages
-import { getMessages } from "../services/messageService";
+import {
+  getRescueTeams,
+  assignTeam,
+  unassignTeam,
+} from "../services/rescueOpsService";
+import { getVictims } from "../services/victimsService";
 import { sendDisasterAlert } from "../services/smsService";
 
 // --- Fix Leaflet Icon Path Issue ---
-import markerIcon2x from "leaflet/dist/images/marker-icon-2x.png";
-import markerIcon from "leaflet/dist/images/marker-icon.png";
 import markerShadow from "leaflet/dist/images/marker-shadow.png";
 delete L.Icon.Default.prototype._getIconUrl;
 L.Icon.Default.mergeOptions({
-  iconRetinaUrl: markerIcon2x,
-  iconUrl: markerIcon,
   shadowUrl: markerShadow,
 });
 
-// --- Custom Icons ---
-const userIcon = new L.Icon({
-  iconUrl:
-    "https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-blue.png",
-  shadowUrl: markerShadow,
-  iconSize: [25, 41],
-  iconAnchor: [12, 41],
-  popupAnchor: [1, -34],
-  shadowSize: [41, 41],
-});
-const teamIcon = new L.Icon({
-  iconUrl:
-    "https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-red.png",
-  shadowUrl: markerShadow,
-  iconSize: [25, 41],
-  iconAnchor: [12, 41],
-  popupAnchor: [1, -34],
-  shadowSize: [41, 41],
-});
-const shelterIcon = new L.Icon({
-  iconUrl:
-    "https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-green.png",
-  shadowUrl: markerShadow,
-  iconSize: [25, 41],
-  iconAnchor: [12, 41],
-  popupAnchor: [1, -34],
-  shadowSize: [41, 41],
-});
+// Helper: small SVG marker
+const createSvgIcon = (fillColor = "#999", size = 28) => {
+  const svg = encodeURIComponent(`
+    <svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 25 41">
+      <path d="M12.5 0C7 0 2.8 4.3 2.8 9.6c0 6.9 9.7 21.4 9.7 21.4s9.7-14.5 9.7-21.4C22.2 4.3 18 0 12.5 0z" fill="${fillColor}" stroke="#00000033" stroke-width="0.6"/>
+      <circle cx="12.5" cy="10" r="4.2" fill="white" opacity="0.9"/>
+      <circle cx="12.5" cy="10" r="2.2" fill="${fillColor}"/>
+    </svg>
+  `);
+  return new L.Icon({
+    iconUrl: `data:image/svg+xml;charset=utf-8,${svg}`,
+    iconSize: [25, 41],
+    iconAnchor: [12, 41],
+    popupAnchor: [1, -34],
+    shadowUrl: markerShadow,
+    shadowSize: [41, 41],
+  });
+};
 
-// --- Choropleth Layer ---
-const ChoroplethLayer = ({ messagePoints, onWardAlert }) => {
+// Icons
+const ICONS = {
+  lightGrey: createSvgIcon("#bfbfbf"),
+  darkGrey: createSvgIcon("#6b6b6b"),
+  black: createSvgIcon("#111111"),
+  victim: createSvgIcon("#2b6cb0"),
+  shelter: createSvgIcon("#16a34a"),
+};
+
+// Choropleth Layer (Unchanged)
+const ChoroplethLayer = ({ victimPoints, onWardAlert, assigningTeamId }) => {
   const [geoData, setGeoData] = useState(null);
+  const victimPointsRef = useRef(victimPoints);
 
-  // FIX: Use a ref to hold the latest messagePoints to avoid stale closures in event handlers.
-  const messagePointsRef = useRef(messagePoints);
   useEffect(() => {
-    messagePointsRef.current = messagePoints;
-  }, [messagePoints]);
+    victimPointsRef.current = victimPoints;
+  }, [victimPoints]);
 
   useEffect(() => {
     fetch("http://localhost:5000/api/map/mumbai-map")
@@ -85,11 +85,10 @@ const ChoroplethLayer = ({ messagePoints, onWardAlert }) => {
     const density = {};
     geoData.features.forEach((_, i) => (density[i] = 0));
 
-    if (!Array.isArray(messagePoints)) return density;
-
-    messagePoints.forEach((m) => {
-      if (typeof m.lat !== "number" || typeof m.lng !== "number") return;
-      const pt = turfPoint([m.lng, m.lat]);
+    if (!Array.isArray(victimPoints)) return density;
+    victimPoints.forEach((v) => {
+      if (typeof v.latitude !== "number" || typeof v.longitude !== "number") return;
+      const pt = turfPoint([v.longitude, v.latitude]);
       geoData.features.forEach((f, i) => {
         try {
           if (booleanPointInPolygon(pt, f)) density[i] += 1;
@@ -97,7 +96,7 @@ const ChoroplethLayer = ({ messagePoints, onWardAlert }) => {
       });
     });
     return density;
-  }, [geoData, messagePoints]);
+  }, [geoData, victimPoints]);
 
   const getColor = (d) =>
     d > 50 ? "#4a0c04" :
@@ -106,12 +105,13 @@ const ChoroplethLayer = ({ messagePoints, onWardAlert }) => {
     d > 5  ? "#E31A1C" :
     d > 1  ? "#FC4E2A" :
     d > 0  ? "#FD8D3C" :
-              "#FFEDA0";
+             "#FFEDA0";
 
   if (!geoData) return null;
 
   return (
     <GeoJSON
+      key={assigningTeamId ? 'assigning' : 'interactive'}
       data={geoData}
       style={(feature) => {
         const idx = geoData.features.indexOf(feature);
@@ -125,6 +125,11 @@ const ChoroplethLayer = ({ messagePoints, onWardAlert }) => {
         };
       }}
       onEachFeature={(feature, layer) => {
+        layer.off();
+        if (assigningTeamId) {
+          return;
+        }
+        
         const idx = geoData.features.indexOf(feature);
         const count = wardDensity[idx] || 0;
         const wardName = feature.properties?.name || "Unknown";
@@ -132,49 +137,42 @@ const ChoroplethLayer = ({ messagePoints, onWardAlert }) => {
         const popupContent = `
           <div>
             <b>Ward:</b> ${wardName}<br/>
-            <b>Messages:</b> ${count}<br/>
-            <button id="alert-btn-${idx}" 
-              style="margin-top:6px; padding:4px 8px; background:#2563eb; color:white; border:none; border-radius:4px; cursor:pointer;">
-              Send Alert
-            </button>
+            <b>Victims:</b> ${count}<br/>
+            <small style="color: #555; margin-top: 5px; display: block;">
+              Double-click the ward to send an alert to this area.
+            </small>
           </div>
         `;
         layer.bindPopup(popupContent);
 
-        layer.on("popupopen", () => {
-          const btn = document.getElementById(`alert-btn-${idx}`);
-          if (btn) {
-            btn.addEventListener("click", () => {
-              // FIX: Use the ref to get the most up-to-date list of messages.
-              const usersInside = messagePointsRef.current.filter((m) => {
-                if (typeof m.lat !== "number" || typeof m.lng !== "number") return false;
-                const pt = turfPoint([m.lng, m.lat]);
-                try {
-                  return booleanPointInPolygon(pt, feature);
-                } catch {
-                  return false;
-                }
-              });
-              onWardAlert(wardName, usersInside);
-              layer.closePopup();
-            });
-          }
+        layer.on("dblclick", (e) => {
+          L.DomEvent.stopPropagation(e);
+          const usersInside = victimPointsRef.current.filter((v) => {
+            if (typeof v.latitude !== "number" || typeof v.longitude !== "number") return false;
+            const pt = turfPoint([v.longitude, v.latitude]);
+            try {
+              return booleanPointInPolygon(pt, feature);
+            } catch {
+              return false;
+            }
+          });
+          onWardAlert(wardName, usersInside);
         });
       }}
     />
   );
 };
 
-// --- Map Data Loader ---
+// --- Map Data Loader (Unchanged) ---
 const MapDataLoader = ({ setMapData }) => {
   const fetchData = () => {
-    Promise.allSettled([getShelters(), getRescueTeams(), getMessages()])
+    Promise.allSettled([getShelters(), getRescueTeams(), getVictims()])
       .then((results) => {
         const shelters = results[0].status === "fulfilled" ? results[0].value : [];
         const teams = results[1].status === "fulfilled" ? results[1].value : [];
-        const messages = results[2].status === "fulfilled" ? results[2].value : [];
+        const victims = results[2].status === "fulfilled" ? results[2].value : [];
 
-        const transformed = transformAll(shelters, teams, messages);
+        const transformed = transformAll(shelters, teams, victims);
         setMapData(transformed);
       });
   };
@@ -183,7 +181,7 @@ const MapDataLoader = ({ setMapData }) => {
   return null;
 };
 
-// --- Flexible Lat/Lng Extractor ---
+// --- Flexible Lat/Lng Extractor (Unchanged) ---
 const extractLatLngFromLocation = (location) => {
   if (!location) return null;
   const num = (val) => {
@@ -205,8 +203,8 @@ const extractLatLngFromLocation = (location) => {
   return null;
 };
 
-// --- Transformer ---
-const transformAll = (shelters = [], teams = [], messages = []) => {
+// --- Transformer (Unchanged) ---
+const transformAll = (shelters = [], teams = [], victims = []) => {
   const transformedShelters = shelters.map((s) => {
     const loc = extractLatLngFromLocation(s);
     return {
@@ -220,63 +218,46 @@ const transformAll = (shelters = [], teams = [], messages = []) => {
   });
 
   const transformedTeams = teams.map((t) => {
-    const loc = extractLatLngFromLocation(t.location || t.loc || {});
+    const leaderLoc = extractLatLngFromLocation(t.leader ?? {});
     return {
       id: t.teamId || t.id || t._id || t.teamName,
       name: t.teamName || t.name || "Rescue Team",
-      leader: t.leader || t.teamLead || "N/A",
+      leader: {
+        id: (t.leader && t.leader.id) || t.leaderId || "unknown",
+        name: (t.leader && t.leader.name) || (t.leader && t.leaderId) || "Leader",
+        latitude: leaderLoc?.lat ?? null,
+        longitude: leaderLoc?.lng ?? null,
+      },
       status: t.status || "Free",
-      lat: loc?.lat,
-      lng: loc?.lng,
-      members: t.members || [],
+      assignedLatitude: t.assignedLatitude ?? null,
+      assignedLongitude: t.assignedLongitude ?? null,
+      members: t.members || {},
     };
   });
 
-  const transformedMessages = (messages || [])
-    .map((m) => {
-      if (!m.location?.latitude || !m.location?.longitude) return null;
-      return {
-        id: m.Timestamp,
-        text: m.Message || "",
-        lat: m.location.latitude,
-        lng: m.location.longitude,
-        timestamp: m.Timestamp,
-        sender: m.Sender, // This 'sender' key holds the phone number
-      };
-    })
-    .filter(Boolean);
+  const transformedVictims = (victims || []).map((v) => {
+    const loc = extractLatLngFromLocation(v);
+    if (!loc?.lat || !loc?.lng) return null;
+    return {
+      authId: v.authId,
+      name: v.name,
+      gender: v.gender,
+      dateOfBirth: v.dateOfBirth,
+      bloodGroup: v.bloodGroup,
+      city: v.city,
+      phoneNumber: v.phoneNumber,
+      latitude: loc.lat,
+      longitude: loc.lng,
+      isActive: v.isActive,
+      createdAt: v.createdAt,
+      updatedAt: v.updatedAt,
+    };
+  }).filter(Boolean);
 
-  return { shelters: transformedShelters, rescueTeams: transformedTeams, messages: transformedMessages };
+  return { shelters: transformedShelters, rescueTeams: transformedTeams, victims: transformedVictims };
 };
 
-// --- Drop Handler Hook ---
-const MapDropHandler = ({ onDropTeam }) => {
-  const map = useMap();
-
-  useEffect(() => {
-    const container = map.getContainer();
-    const handleDragOver = (e) => e.preventDefault();
-    const handleDrop = (e) => {
-      e.preventDefault();
-      const data = e.dataTransfer.getData("team");
-      if (data) {
-        const team = JSON.parse(data);
-        const { lat, lng } = map.containerPointToLatLng([e.layerX, e.layerY]);
-        onDropTeam(team, { lat, lng });
-      }
-    };
-    container.addEventListener("dragover", handleDragOver);
-    container.addEventListener("drop", handleDrop);
-    return () => {
-      container.removeEventListener("dragover", handleDragOver);
-      container.removeEventListener("drop", handleDrop);
-    };
-  }, [map, onDropTeam]);
-
-  return null;
-};
-
-// --- Rectangle Draw Component ---
+// --- Rectangle Draw Component (Unchanged) ---
 const RectangleDraw = ({ active, onCreated, onCancelled }) => {
   const map = useMap();
   const drawState = useRef({
@@ -305,9 +286,13 @@ const RectangleDraw = ({ active, onCreated, onCancelled }) => {
       ds.drawing = false;
       const bounds = ds.layer.getBounds();
       cleanup();
-      const boundsArray = [[bounds.getSouthWest().lat, bounds.getSouthWest().lng], [bounds.getNorthEast().lat, bounds.getNorthEast().lng]];
+      const boundsArray = [
+        [bounds.getSouthWest().lat, bounds.getSouthWest().lng],
+        [bounds.getNorthEast().lat, bounds.getNorthEast().lng],
+      ];
       onCreated(boundsArray, ds.layer);
     };
+
     const cleanup = () => {
       map.getContainer().style.cursor = "";
       if (map.dragging && !map.dragging.enabled()) map.dragging.enable();
@@ -319,71 +304,132 @@ const RectangleDraw = ({ active, onCreated, onCancelled }) => {
     map.on("mousedown", ds.downHandler);
     map.on("mousemove", ds.moveHandler);
     map.on("mouseup", ds.upHandler);
+
     const escHandler = (ev) => {
       if (ev.key === "Escape") {
-        if (ds.layer) { map.removeLayer(ds.layer); ds.layer = null; }
+        if (ds.layer) {
+          map.removeLayer(ds.layer);
+          ds.layer = null;
+        }
         cleanup();
         onCancelled?.();
       }
     };
     window.addEventListener("keydown", escHandler);
+
     return () => {
       window.removeEventListener("keydown", escHandler);
-      map.getContainer().style.cursor = "";
-      if (map.dragging && !map.dragging.enabled()) map.dragging.enable();
-      map.off("mousedown", ds.downHandler);
-      map.off("mousemove", ds.moveHandler);
-      map.off("mouseup", ds.upHandler);
+      cleanup();
     };
   }, [active, map, onCreated, onCancelled]);
+  return null;
+};
 
+// --- Map Click Assign Handler (Unchanged) ---
+const AssignClickHandler = ({ assigningTeamId, onMapClickAssign, onCancel }) => {
+  useMapEvents({
+    click(e) {
+      if (!assigningTeamId) return;
+      L.DomEvent.stopPropagation(e);
+      onMapClickAssign(assigningTeamId, e.latlng);
+    },
+    keydown(e) {
+      if (e.originalEvent && e.originalEvent.key === "Escape") {
+        onCancel();
+      }
+    },
+  });
   return null;
 };
 
 // --- Main Dashboard ---
 const MapDashboard = () => {
-  const [mapData, setMapData] = useState({ messages: [], rescueTeams: [], shelters: [] });
-  const [filters, setFilters] = useState({
-    messages: true, rescueTeams: true, shelters: true, density: true,
-  });
-  const [droppedTeams, setDroppedTeams] = useState([]);
-  const popupRefs = useRef({});
+  const [mapData, setMapData] = useState({ victims: [], rescueTeams: [], shelters: [] });
+  const [filters, setFilters] = useState({ victims: true, rescueTeams: true, shelters: true, density: true });
+  const mapRef = useRef(null);
   const initialPosition = [19.076, 72.8777];
+
+  const [teamsState, setTeamsState] = useState([]);
+  useEffect(() => { setTeamsState(mapData.rescueTeams || []); }, [mapData.rescueTeams]);
+
+  const [assigningTeamId, setAssigningTeamId] = useState(null);
+  const [isDrawingActive, setIsDrawingActive] = useState(false);
+  const [previewTeam, setPreviewTeam] = useState(null);
+  const previewMarkerRef = useRef(null);
+
+  useEffect(() => {
+    if (!teamsState.find(t => t.id === assigningTeamId)) setAssigningTeamId(null);
+  }, [teamsState, assigningTeamId]);
+  
+  // When filters change, if rescueTeams are hidden, clear the preview
+  useEffect(() => {
+    if (!filters.rescueTeams) {
+      setPreviewTeam(null);
+    }
+  }, [filters.rescueTeams]);
 
   const handleFilterChange = (e) => {
     const { name, checked } = e.target;
     setFilters((prev) => ({ ...prev, [name]: checked }));
   };
-  const handleDropTeam = (team, coords) => {
-    setDroppedTeams((prev) => {
-      const newList = [...prev, { ...team, ...coords, placed: false, movable: false }];
-      const idx = newList.length - 1;
-      setTimeout(() => {
-        if (popupRefs.current[idx]) {
-          popupRefs.current[idx].openOn(popupRefs.current[idx]._map);
-        }
-      }, 100);
-      return newList;
-    });
-  };
-  const placeTeam = (idx) => {
-    setDroppedTeams((prev) => prev.map((t, i) => i === idx ? { ...t, placed: true, movable: false } : t));
-    console.log("✅ Team placed:", droppedTeams[idx]);
-  };
-  const discardTeam = (idx) => {
-    console.log("✅ Team discarded:", droppedTeams[idx]);
-    setDroppedTeams((prev) => prev.filter((_, i) => i !== idx));
-  };
-  const enableMove = (idx) => {
-    setDroppedTeams((prev) => prev.map((t, i) => i === idx ? { ...t, movable: true, placed: false } : t));
-  };
-  const updateTeamPosition = (idx, newPos) => {
-    const updated = droppedTeams.map((t, i) => i === idx ? { ...t, lat: newPos.lat, lng: newPos.lng } : t);
-    setDroppedTeams(updated);
-    console.log("♻️ Team moved:", updated[idx]);
+
+  const startAssigning = (teamId) => {
+    setAssigningTeamId(teamId);
+    try { window?.document?.activeElement?.blur?.(); } catch {}
   };
 
-  const [isDrawingActive, setIsDrawingActive] = useState(false);
+  const cancelAssigning = () => setAssigningTeamId(null);
+
+  const handleMapClickAssign = async (teamId, latlng) => {
+    try {
+      await assignTeam(teamId, latlng.lat, latlng.lng);
+      setTeamsState((prev) =>
+        prev.map((t) =>
+          t.id === teamId
+            ? { ...t, assignedLatitude: latlng.lat, assignedLongitude: latlng.lng }
+            : t
+        )
+      );
+      setAssigningTeamId(null);
+      if (previewTeam?.id === teamId) setPreviewTeam(null);
+    } catch (error) {
+      console.error(`Failed to assign team ${teamId}:`, error);
+      alert(`Error assigning team: ${error.message}`);
+      setAssigningTeamId(null);
+    }
+  };
+
+  const assignDirectly = async (teamId, lat, lng) => {
+    try {
+      await assignTeam(teamId, lat, lng);
+      setTeamsState((prev) => prev.map((t) => (t.id === teamId ? { ...t, assignedLatitude: lat, assignedLongitude: lng } : t)));
+      if (previewTeam?.id === teamId) setPreviewTeam(null);
+    } catch (error) {
+      console.error(`Failed to assign team ${teamId} directly:`, error);
+      alert(`Error assigning team: ${error.message}`);
+    }
+  };
+
+  const handleUnassignTeam = async (teamId) => {
+    const originalTeamsState = [...teamsState];
+    setTeamsState((prev) =>
+      prev.map((t) =>
+        t.id === teamId
+          ? { ...t, assignedLatitude: null, assignedLongitude: null }
+          : t
+      )
+    );
+
+    try {
+      await unassignTeam(teamId);
+    } catch (error) {
+      console.error("Failed to unassign team:", error);
+      alert(`Error: ${error.message}`);
+      setTeamsState(originalTeamsState);
+    }
+  };
+
+  // --- Alert/Draw Handlers (Unchanged) ---
   const [alertBounds, setAlertBounds] = useState(null);
   const [alertLayerRef, setAlertLayerRef] = useState(null);
   const [showAlertModal, setShowAlertModal] = useState(false);
@@ -394,54 +440,31 @@ const MapDashboard = () => {
     setAlertBounds(boundsArray);
     setAlertLayerRef(layer || null);
     const bounds = L.latLngBounds(L.latLng(boundsArray[0][0], boundsArray[0][1]), L.latLng(boundsArray[1][0], boundsArray[1][1]));
-    const usersInside = (mapData.messages || []).filter((m) => {
-      if (typeof m.lat !== "number" || typeof m.lng !== "number") return false;
-      return bounds.contains(L.latLng(m.lat, m.lng));
+    const usersInside = (mapData.victims || []).filter((v) => {
+      if (typeof v.latitude !== "number" || typeof v.longitude !== "number") return false;
+      return bounds.contains(L.latLng(v.latitude, v.longitude));
     });
     setAlertUsers(usersInside);
     setShowAlertModal(true);
     setIsDrawingActive(false);
   };
-  const handleCancelDrawing = () => {
-    setIsDrawingActive(false);
-  };
 
-  // UPDATED: Function to call the API service
+  const handleCancelDrawing = () => setIsDrawingActive(false);
+
   const handleSendAlert = async () => {
-    if (!alertMessage.trim() || alertUsers.length === 0) {
-      console.warn("Alert message is empty or no users are selected.");
-      return;
-    }
-
-    // 1. Extract the list of sender phone numbers from the selected users
-    const phoneNumbers = alertUsers.map(user => user.sender).filter(Boolean);
-
+    if (!alertMessage.trim() || alertUsers.length === 0) return;
+    const phoneNumbers = alertUsers.map(u => u.phoneNumber).filter(Boolean);
     if (phoneNumbers.length === 0) {
-      console.warn("No valid sender phone numbers found for the selected users.");
-      alert("Could not send alert: No valid recipients found.");
+      alert("No valid phone numbers found for the selected victims.");
       return;
     }
-
     try {
-      // 2. Call the new API service function
-      console.log(`Sending alert "${alertMessage}" to ${phoneNumbers.length} numbers...`);
-      const response = await sendDisasterAlert(alertMessage, phoneNumbers);
-      console.log("✅ Alert sent successfully! API Response:", response);
-      alert(`Alert successfully sent to ${response.results?.length || 0} numbers.`);
-
-      // 3. Reset state only on successful API call
-      setShowAlertModal(false);
-      setAlertMessage("");
-      setAlertBounds(null);
-      setAlertUsers([]);
-      if (alertLayerRef && alertLayerRef.remove) {
-        try { alertLayerRef.remove(); } catch (e) {}
-        setAlertLayerRef(null);
-      }
-    } catch (error) {
-      // 4. Handle any errors from the API call
-      console.error("❌ Failed to send alert:", error);
-      alert(`Failed to send alert: ${error.message}`);
+      await sendDisasterAlert(alertMessage, phoneNumbers);
+      alert(`Alert sent successfully to ${phoneNumbers.length} recipients.`);
+      handleDiscardAlert();
+    } catch (err) {
+      console.error("Failed to send alert:", err);
+      alert("An error occurred while sending the alert.");
     }
   };
 
@@ -450,136 +473,207 @@ const MapDashboard = () => {
     setAlertMessage("");
     setAlertBounds(null);
     setAlertUsers([]);
-    if (alertLayerRef && alertLayerRef.remove) {
+    if (alertLayerRef?.remove) {
       try { alertLayerRef.remove(); } catch (e) {}
       setAlertLayerRef(null);
     }
   };
+
+  useEffect(() => {
+    if (!previewTeam || !mapRef.current) return;
+    const coords = (previewTeam.leader && typeof previewTeam.leader.latitude === 'number' && typeof previewTeam.leader.longitude === 'number')
+      ? [previewTeam.leader.latitude, previewTeam.leader.longitude]
+      : initialPosition;
+    try {
+      mapRef.current.setView(coords, 14, { animate: true });
+    } catch {}
+    setTimeout(() => {
+      try {
+        if (previewMarkerRef.current && previewMarkerRef.current._map) {
+          previewMarkerRef.current.openPopup();
+        }
+      } catch (e) {}
+    }, 100);
+  }, [previewTeam]);
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-white">Mumbai Disaster Map</h1>
-          <p className="text-gray-400 mt-1">
-            Mumbai's Ward SOS Density, Rescue Teams, and Emergency Shelters
-          </p>
+          <p className="text-gray-400 mt-1">Ward density, rescue teams, shelters, and victims</p>
         </div>
       </div>
 
       <div className="flex gap-6">
         <div className="flex-1 bg-gray-800 rounded-xl overflow-hidden" style={{ height: "70vh" }}>
-          <MapContainer center={initialPosition} zoom={12} style={{ height: "100%", width: "100%" }}>
+          <MapContainer
+            center={initialPosition}
+            zoom={12}
+            style={{ height: "100%", width: "100%" }}
+            whenCreated={(mapInstance) => { mapRef.current = mapInstance; }}
+          >
             <TileLayer
               attribution="&copy; OpenStreetMap"
               url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
             />
             <MapDataLoader setMapData={setMapData} />
-            <MapDropHandler onDropTeam={handleDropTeam} />
-
             {filters.density && (
               <ChoroplethLayer
-                messagePoints={mapData.messages}
+                victimPoints={mapData.victims}
+                assigningTeamId={assigningTeamId}
                 onWardAlert={(wardName, usersInside) => {
                   setAlertBounds(null);
                   setAlertUsers(usersInside);
                   setShowAlertModal(true);
-                  console.log("✅ Ward alert triggered:", wardName, "Users:", usersInside.length);
                 }}
               />
             )}
-
             {isDrawingActive && (
-              <RectangleDraw
-                active={isDrawingActive}
-                onCreated={handleRectangleCreated}
-                onCancelled={handleCancelDrawing}
-              />
+              <RectangleDraw active={isDrawingActive} onCreated={handleRectangleCreated} onCancelled={handleCancelDrawing} />
             )}
-            {alertBounds && (
-              <Rectangle
-                bounds={alertBounds}
-                pathOptions={{ color: "blue", weight: 2, dashArray: "4" }}
-              />
+            {alertBounds && <Rectangle bounds={alertBounds} pathOptions={{ color: "blue", weight: 2, dashArray: "4" }} />}
+
+            {filters.victims && mapData.victims.map((v) =>
+              v.latitude && v.longitude ? (
+                <Marker key={v.authId} position={[v.latitude, v.longitude]} icon={ICONS.victim}>
+                  <Popup><b>{v.name}</b><br/>Phone: {v.phoneNumber}<br/>Blood Group: {v.bloodGroup}</Popup>
+                </Marker>
+              ) : null
             )}
 
-            {filters.messages && mapData.messages.map((msg) =>
-                msg.lat && msg.lng ? (
-                  <Marker key={msg.id} position={[msg.lat, msg.lng]} icon={userIcon}>
-                    <Popup>
-                      <b>Message</b>
-                      <div className="mt-1">{msg.text || "(no text)"}</div>
-                      <div className="mt-2 text-xs text-gray-400">From: {msg.sender || "unknown"}</div>
-                      <div className="text-xs text-gray-400">Time: {msg.timestamp || "-"}</div>
-                    </Popup>
-                  </Marker>
-                ) : null
-              )}
-            {filters.rescueTeams && mapData.rescueTeams.map((team) =>
-                team.lat && team.lng ? (
-                  <Marker key={team.id} position={[team.lat, team.lng]} icon={teamIcon}>
-                    <Popup>
-                      <b>{team.name}</b>
-                      <br />Leader: {team.leader}
-                      <br />Status: {team.status}
-                      <br />Members: {Array.isArray(team.members) ? team.members.length : "N/A"}
-                    </Popup>
-                  </Marker>
-                ) : null
-              )}
-            {filters.shelters && mapData.shelters.map((shelter) =>
-                shelter.lat && shelter.lng ? (
-                  <Marker key={shelter.id} position={[shelter.lat, shelter.lng]} icon={shelterIcon}>
-                    <Popup>
-                      <b>{shelter.name}</b>
-                      <br />Capacity: {shelter.rescuedCount}/{shelter.totalCapacity ?? "?"}
-                    </Popup>
-                  </Marker>
-                ) : null
-              )}
-            {droppedTeams.map((team, idx) => (
+            {filters.shelters && mapData.shelters.map((s) =>
+              s.lat && s.lng ? (
+                <Marker key={s.id} position={[s.lat, s.lng]} icon={ICONS.shelter}>
+                  <Popup><b>{s.name}</b><br/>Capacity: {s.rescuedCount}/{s.totalCapacity ?? "?"}</Popup>
+                </Marker>
+              ) : null
+            )}
+
+            {/* Rescue Teams */}
+            {filters.rescueTeams && teamsState.map((team) => {
+              const leaderLat = team.leader?.latitude;
+              const leaderLng = team.leader?.longitude;
+              const assignedLat = team.assignedLatitude;
+              const assignedLng = team.assignedLongitude;
+              const hasAssigned = typeof assignedLat === "number" && typeof assignedLng === "number";
+              const leaderIcon = hasAssigned ? ICONS.darkGrey : ICONS.lightGrey;
+
+              return (
+                <React.Fragment key={`team-${team.id}`}>
+                  {typeof leaderLat === "number" && typeof leaderLng === "number" && (
+                    <Marker position={[leaderLat, leaderLng]} icon={leaderIcon}>
+                      <Popup>
+                        <div style={{ minWidth: 220 }}>
+                          <b>{team.name}</b><br/>
+                          <small>Leader: {team.leader?.name}</small><br/>
+                          <small>Status: {team.status}</small>
+                          <div className="mt-3 flex gap-2">
+                            {!hasAssigned ? (
+                              <button onClick={() => startAssigning(team.id)} className="px-2 py-1 bg-indigo-600 text-white rounded">
+                                Assign Location
+                              </button>
+                            ) : (
+                              <>
+                                <button onClick={() => startAssigning(team.id)} className="px-2 py-1 bg-yellow-500 text-black rounded">
+                                  Reassign
+                                </button>
+                                <button onClick={() => handleUnassignTeam(team.id)} className="px-2 py-1 bg-red-600 text-white rounded">
+                                  Remove Assignment
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      </Popup>
+                    </Marker>
+                  )}
+
+                  {hasAssigned && (
+                    <>
+                      <Marker position={[assignedLat, assignedLng]} icon={ICONS.black}>
+                        <Popup>
+                          <div style={{ minWidth: 180 }}>
+                            <b>Assigned: {team.name}</b><br/>
+                            <small>Assigned coords: {assignedLat.toFixed(5)}, {assignedLng.toFixed(5)}</small>
+                            <div className="mt-2 flex gap-2">
+                              {/* --- FIX 2: UNCOMMENTED THIS BUTTON --- */}
+                              <button onClick={() => startAssigning(team.id)} className="px-2 py-1 bg-yellow-500 text-black rounded">
+                                Move Assigned
+                              </button>
+                              <button onClick={() => handleUnassignTeam(team.id)} className="px-2 py-1 bg-red-600 text-white rounded">
+                                Unassign
+                              </button>
+                            </div>
+                          </div>
+                        </Popup>
+                      </Marker>
+                      <Polyline positions={[[leaderLat, leaderLng], [assignedLat, assignedLng]]} pathOptions={{ color: "#222", weight: 2, opacity: 0.8, dashArray: "2" }} />
+                    </>
+                  )}
+                </React.Fragment>
+              );
+            })}
+            
+            {/* --- FIX 1: ADDED filters.rescueTeams CONDITION HERE --- */}
+            {/* Preview Marker */}
+            {filters.rescueTeams && previewTeam && (
               <Marker
-                key={`dropped-${idx}`}
-                position={[team.lat, team.lng]}
-                icon={teamIcon}
-                draggable={team.movable}
-                eventHandlers={{
-                  dragend: (e) => {
-                    const { lat, lng } = e.target.getLatLng();
-                    updateTeamPosition(idx, { lat, lng });
-                  },
-                }}
+                ref={previewMarkerRef}
+                position={
+                  (previewTeam.leader && typeof previewTeam.leader.latitude === 'number' && typeof previewTeam.leader.longitude === 'number')
+                    ? [previewTeam.leader.latitude, previewTeam.leader.longitude]
+                    : initialPosition
+                }
+                icon={ICONS.lightGrey}
               >
-                <Popup ref={(ref) => (popupRefs.current[idx] = ref)}>
-                  <b>{team.name}</b>
-                  <br />Leader: {team.leader}
-                  <br />Members: {Array.isArray(team.members) ? team.members.length : "N/A"}
-                  <div className="mt-3 flex gap-2">
-                    <button
-                      className={`px-2 py-1 rounded ${team.placed && !team.movable ? "bg-gray-500 cursor-not-allowed" : "bg-green-600 text-white"}`}
-                      disabled={team.placed && !team.movable}
-                      onClick={() => placeTeam(idx)}
-                    >
-                      Place
-                    </button>
-                    <button
-                      className="px-2 py-1 bg-red-600 text-white rounded"
-                      onClick={() => discardTeam(idx)}
-                    >
-                      Discard
-                    </button>
-                    <button
-                      className={`px-2 py-1 rounded ${!team.placed ? "bg-gray-500 cursor-not-allowed" : "bg-blue-600 text-white"}`}
-                      disabled={!team.placed}
-                      onClick={() => enableMove(idx)}
-                    >
-                      Move
-                    </button>
+                <Popup>
+                  <div style={{ minWidth: 220 }}>
+                    <b>{previewTeam.name}</b><br/>
+                    <small>Leader: {previewTeam.leader?.name}</small>
+                    <div className="mt-3 flex flex-col gap-2">
+                      {(previewTeam.leader && typeof previewTeam.leader.latitude === 'number' && typeof previewTeam.leader.longitude === 'number') && (
+                        <button
+                          onClick={() => assignDirectly(previewTeam.id, previewTeam.leader.latitude, previewTeam.leader.longitude)}
+                          className="px-2 py-1 bg-green-600 text-white rounded"
+                        >
+                          Assign to Leader Location
+                        </button>
+                      )}
+                      <button onClick={() => startAssigning(previewTeam.id)} className="px-2 py-1 bg-indigo-600 text-white rounded">
+                        Assign by Clicking on Map
+                      </button>
+                      <button onClick={() => setPreviewTeam(null)} className="px-2 py-1 bg-gray-300 rounded">
+                        Close
+                      </button>
+                    </div>
                   </div>
                 </Popup>
               </Marker>
-            ))}
+            )}
+
+            {assigningTeamId && (
+              <AssignClickHandler
+                assigningTeamId={assigningTeamId}
+                onMapClickAssign={handleMapClickAssign}
+                onCancel={cancelAssigning}
+              />
+            )}
           </MapContainer>
+
+          {assigningTeamId && (
+            <div style={{
+              position: "absolute", left: 24, bottom: 24, zIndex: 1000,
+              background: "rgba(17,24,39,0.92)", color: "white", padding: "10px 12px",
+              borderRadius: 8, boxShadow: "0 6px 18px rgba(0,0,0,0.4)",
+            }}>
+              <div style={{ fontWeight: 600 }}>Assigning location</div>
+              <div style={{ fontSize: 13, marginTop: 4 }}>Click anywhere on the map to assign. Press Esc or Cancel to abort.</div>
+              <div style={{ marginTop: 8, display: "flex", gap: 8 }}>
+                <button onClick={cancelAssigning} style={{ padding: "6px 8px", borderRadius: 6, background: "#ef4444", color: "white", border: "none" }}>Cancel</button>
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="w-64 bg-gray-900 rounded-xl p-4 border border-gray-700 h-[70vh] overflow-y-auto">
@@ -587,47 +681,52 @@ const MapDashboard = () => {
             <SlidersHorizontal size={18} /> Map Filters
           </h3>
           <div className="space-y-3">
-            {["messages", "rescueTeams", "shelters", "density"].map((f) => (
-            // {["SOS", "Rescue Teams", "Shelters", "Ward Density"].map((f) => (
+            {["victims", "rescueTeams", "shelters", "density"].map((f) => (
               <div key={f} className="flex items-center">
                 <input
-                  type="checkbox"
-                  id={f} name={f}
-                  checked={filters[f]}
-                  onChange={handleFilterChange}
+                  type="checkbox" id={f} name={f} checked={filters[f]} onChange={handleFilterChange}
                   className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-600 rounded bg-gray-800"
                 />
                 <label htmlFor={f} className="ml-3 text-sm font-medium text-gray-300 capitalize">
-                  {f === "density" ? "Ward Density" : f}
+                  {f === "density" ? "Ward Density (Victims)" : f}
                 </label>
               </div>
             ))}
           </div>
-          <div className="mt-4">
+
+          <div className="mt-4 pt-4 border-t border-gray-700">
             <button
               className={`w-full px-3 py-2 rounded ${isDrawingActive ? "bg-yellow-500 text-black" : "bg-indigo-600 text-white"}`}
               onClick={() => setIsDrawingActive((s) => !s)}
             >
-              {isDrawingActive ? "Cancel Alert Draw" : "Send Alert"}
+              {isDrawingActive ? "Cancel Alert Draw" : "Send Alert (draw area)"}
             </button>
             <p className="text-xs text-gray-400 mt-2">
-              Click the button, then click+drag on the map to draw a rectangle.
+              Click, then drag on the map to select an area for an alert.
             </p>
           </div>
+
           <div className="mt-6 border-t border-gray-700 pt-4">
             <h3 className="text-lg font-semibold text-white mb-3">Available Teams</h3>
             <div className="space-y-2 text-sm">
               {(() => {
-                const availableTeams = mapData.rescueTeams.filter(team => !team.lat && !team.lng);
+                const availableTeams = teamsState.filter(team => team.assignedLatitude == null || team.assignedLongitude == null);
                 if (availableTeams.length === 0) {
-                  return <p className="text-gray-500">No teams currently available.</p>;
+                  return <p className="text-gray-500">No teams available.</p>;
                 }
                 return availableTeams.map(team => (
-                  <div key={team.id} className="p-2 bg-gray-800 rounded cursor-move" draggable
-                    onDragStart={(e) => e.dataTransfer.setData("team", JSON.stringify(team))}>
+                  <div
+                    key={team.id}
+                    className="p-2 bg-gray-800 rounded cursor-pointer hover:bg-gray-700"
+                    onClick={() => {
+                      if (filters.rescueTeams) { // Only allow preview if the filter is on
+                        setPreviewTeam(team);
+                      }
+                    }}
+                  >
                     <p className="font-bold text-white">{team.name}</p>
-                    <p className="text-gray-400">Leader: {team.leader}</p>
-                    <p className="text-gray-400">Members: {Array.isArray(team.members) ? team.members.length : "N/A"}</p>
+                    <p className="text-gray-400">Leader: {team.leader?.name}</p>
+                    <div className="mt-1 text-xs text-gray-500">Click to preview & assign this team on the map.</div>
                   </div>
                 ));
               })()}
@@ -637,26 +736,21 @@ const MapDashboard = () => {
       </div>
 
       {showAlertModal && (
-        <div className="fixed inset-0 z-999 flex items-center justify-center">
+        <div className="fixed inset-0 z-[1000] flex items-center justify-center">
           <div className="absolute inset-0 bg-black/60" onClick={handleDiscardAlert}></div>
           <div className="relative bg-white rounded-lg w-[min(90%,420px)] p-4 z-10">
             <h3 className="text-lg font-semibold mb-2">Send Alert</h3>
-            <p className="text-sm text-gray-600 mb-3">Users found inside selected area: <b>{alertUsers.length}</b></p>
+            <p className="text-sm text-gray-600 mb-3">Victims found in area: <b>{alertUsers.length}</b></p>
             <textarea
               value={alertMessage}
               onChange={(e) => setAlertMessage(e.target.value)}
-              placeholder="Type your alert message here..."
+              placeholder="Type your alert message..."
               className="w-full p-2 border border-gray-300 rounded h-28 mb-3 resize-none"
             />
             <div className="flex justify-end gap-2">
-              <button className="px-3 py-1 rounded bg-gray-300" onClick={handleDiscardAlert}>
-                Discard
-              </button>
-              <button
-                className={`px-3 py-1 rounded ${alertMessage.trim() ? "bg-blue-600 text-white" : "bg-blue-300 cursor-not-allowed"}`}
-                onClick={handleSendAlert}
-                disabled={!alertMessage.trim()}
-              >
+              <button className="px-3 py-1 rounded bg-gray-300" onClick={handleDiscardAlert}>Discard</button>
+              <button className={`px-3 py-1 rounded ${alertMessage.trim() ? "bg-blue-600 text-white" : "bg-blue-300 cursor-not-allowed"}`}
+                onClick={handleSendAlert} disabled={!alertMessage.trim()}>
                 Send
               </button>
             </div>

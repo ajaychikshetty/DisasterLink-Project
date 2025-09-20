@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     FIREBASE_COLLECTION_Admins: str = "admins"
 
     # Twilio (optional)
+    FIREBASE_COLLECTION_VICTIMS: str = "victims"
     # TWILIO_ACCOUNT_SID: str
     # TWILIO_AUTH_TOKEN: str
     # TWILIO_FROM_NUMBER: str

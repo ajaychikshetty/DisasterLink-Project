@@ -1,11 +1,21 @@
-# rescue schema, rescuers + rescue ops
+# backend/app/schemas/rescue.py
 
 from pydantic import BaseModel, Field
-from typing import List, Optional
-from schemas.common import Location
+from typing import List, Optional, Dict
+from enum import Enum
+from .common import Location # Assuming you have a common schema for Location
 
-# Rescue Member
+# --- Enums for status choices ---
+class TeamStatus(str, Enum):
+    FREE = "Free"
+    ASSIGNED = "Assigned"
+    UNAVAILABLE = "Unavailable"
+    UNKNOWN = "Unknown"
+
+
+# --- Rescuer Schemas ---
 class RescueMemberCreate(BaseModel):
+    email: str
     name: str
     dob: str
     phone: str
@@ -13,7 +23,7 @@ class RescueMemberCreate(BaseModel):
     loginAvailable: Optional[bool] = True
 
 class RescueMemberResponse(BaseModel):
-    id: str  # <-- Firestore auto ID
+    id: str
     name: str
     dob: str
     phone: str
@@ -24,26 +34,31 @@ class RescueMemberResponse(BaseModel):
     location: Optional[Location] = None
 
 
-# Rescue Team
-class RescueTeamResponse(BaseModel):
-    teamId: str
-    teamName: Optional[str] = None
-    leader: Optional[str] = None
-    members: List[str] = Field(default_factory=list)
-    status: str = "Free"
-    assignedIncident: Optional[str] = None
-    location: Optional[Location] = None
+# --- Team Schemas (NEW STRUCTURE) ---
 
-class RescueTeamUpdate(BaseModel):
-    name: str
-    leader: str
-    members: List[str] = Field(default_factory=list)
-    location: Optional[Location] = None
-
+class LeaderInfo(BaseModel):
+    id: str
+    name: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
 
 class RescueTeamCreate(BaseModel):
-    name: str
-    leader: Optional[str] = None  # id/username of leader
-    # optional fields client may pass
-    members: Optional[List[str]] = Field(default_factory=list)
-    location: Optional[Location] = None
+    teamName: str
+    leader: Optional[str] = None  # Leader's ID
+    members: List[str] = Field(default_factory=list) # List of member IDs
+
+class RescueTeamUpdate(BaseModel):
+    teamName: Optional[str] = None
+    leader: Optional[str] = None
+    members: Optional[List[str]] = None
+
+class RescueTeamResponse(BaseModel):
+    teamAddress: Optional[str] = None
+    teamId: str
+    teamName: Optional[str] = None
+    leader: Optional[LeaderInfo] = None
+    members: Dict[str, Optional[str]] = Field(default_factory=dict) # {id: name, id: name}
+    status: TeamStatus = TeamStatus.UNKNOWN
+    assignedLatitude: Optional[float] = None
+    assignedLongitude: Optional[float] = None
+    nearestVictims: Optional[List[str]] = None

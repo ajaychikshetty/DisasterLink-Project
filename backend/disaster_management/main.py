@@ -3,7 +3,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from firebase import cred, db
 from fastapi.middleware.cors import CORSMiddleware
-from routers import users, incidents, rescue_ops, shelters, maps, communication, rescuers, sms, messages, auth, autoassign
+from routers import users, incidents, rescue_ops, shelters, maps, communication, rescuers, sms, messages, victims, auth, autoassign
 
 app = FastAPI(
     title="Disaster Management API",
@@ -37,6 +37,7 @@ app.include_router(messages.router)
 app.include_router(auth.router)
 app.include_router(autoassign.router)
 
+app.include_router(victims.router)
 
 
 @app.get("/", tags=["Root"])

@@ -6,6 +6,15 @@ from schemas.incident import IncidentCreate
 from services import user_service, incident_service 
 from routers.users import get_user_by_phone
 
+from routers.victims import update_victim_location
+from routers.rescuers import update_rescuer_location
+from routers.shelters import add_member_to_shelter
+from routers.rescue_ops import sendVictimListToTeamMember
+
+
+
+
+# @router.post("/receive_sms")
 def handle_sms_command(from_phone: str, body: str) -> str:
     """
     Parses and routes an incoming SMS command to the correct service.
@@ -14,6 +23,7 @@ def handle_sms_command(from_phone: str, body: str) -> str:
     try:
         command, payload_str = body.split(" ", 1)
         payload = json.loads(payload_str)
+        command = payload.get("msg", command)  
     except (ValueError, json.JSONDecodeError):
         return "Invalid command format. Use: COMMAND {\"json\": \"payload\"}"
 
@@ -41,11 +51,47 @@ def handle_sms_command(from_phone: str, body: str) -> str:
             return f"Incident reported successfully. Your incident ID is {new_incident.incidentId}."
         except (ValidationError, KeyError) as e:
             return f"Error: Invalid data for INCIDENT_REPORT. Details: {e}"
+        
 
-    # Add more command handlers here (e.g., GET_SHELTERS)
-    # elif command == "GET_SHELTERS":
-    #     ... call a shelter_service to find nearest shelters ...
-    #     return "Shelter info..."
+    elif command == "User Location update":
+        # params: update_victim_location(lat: float, lon: float, msg: str, bat: int, time: str, phone: str):            
+        update_victim_location(
+            lat=payload.get("lat"),
+            lon=payload.get("lon"),
+            bat=payload.get("bat"),
+            time=payload.get("time"),
+            phone=from_phone
+        )
+
+    elif command == "Rescuer Location update":
+        # params: update_rescuer_location(lat: float, lon: float, msg: str, bat: int, time: str, id: str):
+        update_rescuer_location(
+            lat=payload.get("lat"),
+            lon=payload.get("lon"),
+            time=payload.get("time"),
+            id=payload.get("rescuer_email")
+        )
+
+    elif command == "201": # add member to shelter
+        # params: addUserToShelter(shelterId: str, phone: str):
+        add_member_to_shelter(
+            shelterId=payload.get("shelterId"),
+            memberId=from_phone
+        )
+
+    elif command == "1":
+        # params: sendVictimListToTeamMember(rescuerId: str):
+        sendVictimListToTeamMember(
+            rescuerId=from_phone
+        )
+
+
+    
+
+
+    # SEND NEAREST SHELTER ID, with list of users in that particular area when team is assigned
+
+
 
     else:
-        return f"Unknown command: {command}. Supported commands: STATUS_UPDATE, INCIDENT_REPORT."
+        return f"Unknown command: {command}."

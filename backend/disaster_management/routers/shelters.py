@@ -1,5 +1,6 @@
 # shelter route
 
+from os import name
 from fastapi import APIRouter, HTTPException
 from firebase import db
 from config import settings
@@ -131,3 +132,43 @@ def remove_member_from_shelter(shelterId: str, memberId: str):
 
     shelter["id"] = doc.id
     return enrich_shelter_with_users(shelter)
+
+
+
+
+
+
+# shelter sms:
+
+def addUserToShelter(shelterId: str, phone: str):
+    # rescuedmember[userid] = phone
+    ref = db.collection(settings.FIREBASE_COLLECTION_SHELTERS).document(shelterId)
+    doc = ref.get()
+    if not doc.exists:
+        raise HTTPException(status_code=404, detail="Shelter not found")
+
+    shelter = doc.to_dict()
+    members = shelter.get("rescuedMembers", {})
+
+    # get name from victims collection:
+    doc_ref = db.collection(settings.FIREBASE_COLLECTION_VICTIMS).document(phone)
+    victim = doc_ref.get()
+    if not victim.exists:    
+        raise HTTPException(status_code=404, detail="Victim not found")
+    
+    name = victim.to_dict().get("name", "Unknown")
+    
+    members[phone] = name
+    shelter["rescuedMembers"] = members
+    shelter["lastUpdated"] = int(time.time() * 1000)
+    ref.update(shelter)
+
+    # update the victim isActive to false:
+    doc_ref = db.collection(settings.FIREBASE_COLLECTION_VICTIMS).document(phone)
+    victim_data = {
+        "isActive": False,
+        "updatedAt": int(time.time() * 1000)
+    }
+    doc_ref.update(victim_data)
+
+

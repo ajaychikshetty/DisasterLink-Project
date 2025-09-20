@@ -39,7 +39,7 @@ def get_user(userId: str):
 @router.get("/by-phone/{phone_number}", response_model=UserResponse)
 def get_user_by_phone(phone_number: str):
     users_ref = db.collection(settings.FIREBASE_COLLECTION_USERS)
-    query = users_ref.where("contactNo", "==", phone_number).limit(1).stream()
+    query = users_ref.where("phoneNumber", "==", phone_number).limit(1).stream()
     user_doc = next(query, None)
     print(query)
     print(user_doc.to_dict() if user_doc else "No user found")

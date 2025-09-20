@@ -9,6 +9,7 @@ import {
   Edit,
   Trash2,
   AlertCircle,
+  Mail, // Added for email icon
 } from "lucide-react";
 import SlideInForm from './SlideInForm';
 
@@ -22,6 +23,7 @@ const RescuerManagement = () => {
   const [formData, setFormData] = useState({
     id: '',
     name: '',
+    email: '', // Added email field
     dob: '',
     phones: [''], // first phone shown as primary
     status: 'Free',
@@ -51,6 +53,7 @@ const RescuerManagement = () => {
       setFormData({
         id: editingRescuer.id || '',
         name: editingRescuer.name || '',
+        email: editingRescuer.email || '', // Populate email for editing
         dob: editingRescuer.dob || '',
         phones: editingRescuer.phone ? [editingRescuer.phone, ...(editingRescuer.extraPhones || [])] : [''],
         status: editingRescuer.status || 'Free',
@@ -58,7 +61,8 @@ const RescuerManagement = () => {
         removePassword: false,
       });
     } else {
-      setFormData({ name: '', dob: '', phones: [''], status: 'Free', active: true, removePassword: false });
+      // Reset form for new rescuer, including email
+      setFormData({ name: '', email: '', dob: '', phones: [''], status: 'Free', active: true, removePassword: false });
     }
   }, [editingRescuer]);
 
@@ -68,9 +72,10 @@ const RescuerManagement = () => {
     try {
       setError(null);
 
-      // prepare payload (no lat/long updates per request)
+      // prepare payload
       const payload = {
         name: formData.name,
+        email: formData.email, // Add email to the payload
         dob: formData.dob,
         phone: formData.phones[0] || '',
         extraPhones: formData.phones.slice(1).filter(Boolean),
@@ -78,14 +83,12 @@ const RescuerManagement = () => {
         active: !!formData.active,
       };
 
-      // If user toggled remove password, include a flag (UI-level only; backend may choose to honour it)
       if (formData.removePassword) payload.removePassword = true;
 
       if (editingRescuer) {
-        // keep using existing rescuer identifier (username) for update as before
         await rescuerService.updateRescuer(editingRescuer.id, payload);
       } else {
-        await rescuerService.createRescuer(payload);
+        await rescuerService.createRescuer(payload); // Pass payload with email
       }
 
       setIsFormVisible(false);
@@ -140,7 +143,6 @@ const RescuerManagement = () => {
       )}
 
       {!isLoading && !error && (
-        console.log(rescuers),
         <div className="bg-gray-800 rounded-xl overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full">
@@ -155,7 +157,6 @@ const RescuerManagement = () => {
               </thead>
               <tbody className="divide-y divide-gray-700">
                 {rescuers.map(rescuer => (
-                  console.log(rescuer),
                   <tr key={rescuer.id} className="hover:bg-gray-700/50">
                     <td className="px-6 py-4">
                       <div className="flex items-center gap-3">
@@ -164,7 +165,10 @@ const RescuerManagement = () => {
                         </div>
                         <div>
                           <div className="text-sm font-medium text-white">{rescuer.name}</div>
-                          <div className="text-sm text-gray-400">{rescuer.id}</div>
+                          <div className="text-sm text-gray-400 flex items-center gap-1.5">
+                            <Mail size={12} />
+                            {rescuer.email || 'No email'}
+                          </div>
                         </div>
                       </div>
                     </td>
@@ -225,38 +229,31 @@ const RescuerManagement = () => {
             />
           </div>
 
-        {/* Phone */}
-        <div>
-            <label className="block text-sm font-medium text-gray-300 mb-2">Phone Number</label>
+          {/* Email Address */}
+          <div>
+            <label className="block text-sm font-medium text-gray-300 mb-2">Email Address</label>
             <input
-                type="tel"
-                value={formData.phones[0]}
-                onChange={(e) => setFormData(prev => ({ ...prev, phones: [e.target.value] }))}
-                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white focus:ring-2 focus:ring-indigo-500"
-                placeholder="Phone number"
-                required
+              type="email"
+              value={formData.email}
+              onChange={(e) => setFormData(prev => ({ ...prev, email: e.target.value }))}
+              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white focus:ring-2 focus:ring-indigo-500"
+              placeholder="user@example.com"
+              required
             />
-        </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-300 mb-2">Status</label>
-              <select value={formData.status} onChange={(e) => setFormData(prev => ({ ...prev, status: e.target.value }))} className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white">
-                <option value="Free">Free</option>
-                <option value="Engaged">Engaged</option>
-                <option value="On Mission">On Mission</option>
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-300 mb-2">Login Available?</label>
-              <select value={formData.active ? 'Active' : 'Disabled'} onChange={(e) => setFormData(prev => ({ ...prev, active: e.target.value === 'Active' }))} className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white">
-                <option value="Active">Active</option>
-                <option value="Disabled">Disabled</option>
-              </select>
-            </div>
           </div>
 
-
+          {/* Phone */}
+          <div>
+            <label className="block text-sm font-medium text-gray-300 mb-2">Phone Number</label>
+            <input
+              type="tel"
+              value={formData.phones[0]}
+              onChange={(e) => setFormData(prev => ({ ...prev, phones: [e.target.value, ...prev.phones.slice(1)] }))}
+              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white focus:ring-2 focus:ring-indigo-500"
+              placeholder="Primary phone number"
+              required
+            />
+          </div>
           {/* Form actions */}
           <div className="flex gap-3 pt-4">
             <button type="button" onClick={() => { setIsFormVisible(false); setEditingRescuer(null); }} className="flex-1 bg-gray-700 hover:bg-gray-600 text-white py-2 px-4 rounded-lg">Cancel</button>
