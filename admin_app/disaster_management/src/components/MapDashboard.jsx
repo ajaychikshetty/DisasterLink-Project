@@ -71,7 +71,7 @@ const ChoroplethLayer = ({ messagePoints, onWardAlert }) => {
   }, [messagePoints]);
 
   useEffect(() => {
-    fetch("http://localhost:8000/api/map/mumbai-map")
+    fetch("http://localhost:5000/api/map/mumbai-map")
       .then((res) => res.json())
       .then((data) => setGeoData(data))
       .catch((err) => {

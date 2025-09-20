@@ -1,4 +1,4 @@
-const API_URL = 'http://localhost:8000/api/map/coverage';
+const API_URL = 'http://localhost:5000/api/map/coverage';
 
 /**
  * Fetches all users, rescue teams, and shelters within a given map bounds.

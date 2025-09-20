@@ -1,7 +1,9 @@
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+from firebase import cred, db
 from fastapi.middleware.cors import CORSMiddleware
-from routers import users, incidents, rescue_ops, shelters, maps, communication, rescuers, sms, messages
+from routers import users, incidents, rescue_ops, shelters, maps, communication, rescuers, sms, messages, auth, autoassign
 
 app = FastAPI(
     title="Disaster Management API",
@@ -9,11 +11,15 @@ app = FastAPI(
     version="1.0.0"
 )
 
+
+
+
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Change this to restrict origins
+    # allow_origins=["*"],  # Change this to restrict origins
     allow_credentials=True,
+    allow_origins=["http://localhost:5173"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -28,6 +34,9 @@ app.include_router(communication.router)
 app.include_router(rescuers.router)
 app.include_router(sms.router)
 app.include_router(messages.router)
+app.include_router(auth.router)
+app.include_router(autoassign.router)
+
 
 
 @app.get("/", tags=["Root"])
@@ -36,4 +45,5 @@ def read_root():
 
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=5000, reload=True)
+    

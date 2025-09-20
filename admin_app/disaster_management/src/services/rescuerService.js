@@ -1,5 +1,5 @@
 // The base URL for your FastAPI backend's rescuer endpoints
-const API_URL = 'http://localhost:8000/api/rescuemembers';
+const API_URL = 'http://localhost:5000/api/rescuemembers';
 
 /**
  * Fetches all rescuers from the API.

@@ -1,5 +1,5 @@
 // The base URL for your FastAPI backend's messages endpoints
-const API_URL = 'http://localhost:8000/api/messages/';
+const API_URL = 'http://localhost:5000/api/messages/';
 
 /**
  * Fetches all messages from the API.
