@@ -54,11 +54,11 @@ const createSvgIcon = (fillColor = "#999", size = 28) => {
 
 // Icons
 const ICONS = {
-  lightGrey: createSvgIcon("#bfbfbf"),
-  darkGrey: createSvgIcon("#6b6b6b"),
-  black: createSvgIcon("#111111"),
-  victim: createSvgIcon("#2b6cb0"),
-  shelter: createSvgIcon("#16a34a"),
+  lightGrey: createSvgIcon("#7fe81dff"), // team free 
+  darkGrey: createSvgIcon("#e419ebff"),
+  black: createSvgIcon("#fae20aff"),
+  victim: createSvgIcon("#ff0000ff"),
+  shelter: createSvgIcon("#370aeaff"),
 };
 
 // Choropleth Layer (Unchanged)
@@ -544,9 +544,17 @@ const MapDashboard = () => {
 
             {filters.shelters && mapData.shelters.map((s) =>
               s.lat && s.lng ? (
-                <Marker key={s.id} position={[s.lat, s.lng]} icon={ICONS.shelter}>
-                  <Popup><b>{s.name}</b><br/>Capacity: {s.rescuedCount}/{s.totalCapacity ?? "?"}</Popup>
-                </Marker>
+                <Marker key={s.id} position={[s.lat, s.lng]} icon={
+                    new L.DivIcon({
+                    html: `<div style="font-size: 2rem; color: #370aeaff; line-height: 1;"><span role="img" aria-label="house">🏠</span></div>`,
+                    className: "",
+                    iconSize: [32, 32],
+                    iconAnchor: [16, 32],
+                    popupAnchor: [0, -32],
+                    })
+                  }>
+                    <Popup><b>{s.name}</b><br/>Capacity: {s.rescuedCount}/{s.totalCapacity ?? "?"}</Popup>
+                  </Marker>
               ) : null
             )}
 

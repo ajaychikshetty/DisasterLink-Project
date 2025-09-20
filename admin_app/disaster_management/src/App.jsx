@@ -50,7 +50,6 @@ const App = () => {
   const navigation = [
     { id: 'dashboard', name: 'Dashboard', icon: Home },
     { id: 'map', name: 'Live Map', icon: Map },
-    { id: 'users', name: 'Users', icon: Users },
     { id: 'rescuers', name: 'Rescuers', icon: Shield },
     { id: 'teams', name: 'Rescue Teams', icon: UserCheck },
     { id: 'shelters', name: 'Shelters', icon: Building },
@@ -93,7 +92,7 @@ const App = () => {
             <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center">
               <Shield size={20} className="text-white" />
             </div>
-            <span className="text-xl font-bold text-white">RescueOps</span>
+            <span className="text-xl font-bold text-white">Disaster Link</span>
           </div>
           <button
             onClick={() => setSidebarOpen(false)}

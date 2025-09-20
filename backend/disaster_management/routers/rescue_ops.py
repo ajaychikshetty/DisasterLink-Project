@@ -266,12 +266,17 @@ def assign_team(team_id: str, latitude: float = Body(...), longitude: float = Bo
             if not nearest_victims:
                 continue
 
-            # Send the list of nearest victims to the rescuer via SMS
-            for victim in nearest_victims:
-                victim_list_str = f'{victim.get("phoneNumber","N/A")},{victim.get("name","N/A")},{victim.get("dateOfBirth","N/A")},{victim.get("status","N/A")};'
-                victim_list_message = f'DISASTERLINKx9050 {{"msg": "98", "victim": "{victim_list_str}"}}'
-                send_sms(phone_number, victim_list_message)
-                print(victim_list_message)
+            nearest_victims_string = cluster_and_prioritize_victims(nearest_victims, rescuer_lat=latitude, rescuer_lon=longitude)
+            print("-=-=-=-==-=-==-=-=-=-=-=-=-=-=-=-=--=-=")
+            print(nearest_victims_string)
+            send_sms(phone_number, f'DISASTERLINKx9050 {{"msg": "97", "victims_count": {nearest_victims_string}}}')
+
+            # print(nearest_victims)
+            # # Send the list of nearest victims to the rescuer via SMS
+            # for victim in nearest_victims:
+            #     victim_list_str = f'{victim.get("phoneNumber","N/A")},{victim.get("name","N/A")},{victim.get("dateOfBirth","N/A")},{victim.get("status","N/A")};'
+            #     victim_list_message = f'DISASTERLINKx9050 {{"msg": "98", "victim": "{victim_list_str}"}}'
+            #     print(victim_list_message)
             # victim_list_message = f'DISASTERLINKx9050 {{"msg": "98", "victims": "{victim_list_str}"}}'
 
             
@@ -390,7 +395,9 @@ def find_nearest_victims(lat: float, lon: float, victims: list, radius_km: float
             if distance <= radius_km:
                 nearby_victims.append(victim)
     
-    return nearby_victims
+    
+
+    return nearby_victims    
 
 
 
@@ -676,4 +683,173 @@ def auto_assign_team_to_incident(incident_id: str):
     
     # Call the existing assignment function
     return assign_team(best_team_id, incident_location['latitude'], incident_location['longitude'])
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+from typing import List, Dict, Any
+def cluster_and_prioritize_victims(
+    all_active_victims: List[Dict[str, Any]], 
+    rescuer_lat: float, 
+    rescuer_lon: float,
+    operational_radius_km: float = 5.0,
+    cluster_radius_m: float = 1400.0
+) -> List[Dict[str, Any]]:
+    """
+    Clusters active victims, prioritizes them, and returns a summarized list of clusters.
+
+    Returns:
+        A sorted list of dictionaries, where each dictionary represents a cluster with:
+            'cluster_priority_score': The calculated priority score for the cluster.
+            'center_latitude': Latitude of the cluster's approximate center.
+            'center_longitude': Longitude of the cluster's approximate center.
+            'male_count': Number of male victims in the cluster.
+            'female_count': Number of female victims in the cluster.
+            'kid_count': Number of victims younger than 16 in the cluster.
+    """
+
+    scored_nearby_victims = []
+    
+    # 1. Fetch and Score All Nearby Victims
+    for victim in all_active_victims:
+        victim_lat = victim.get('latitude')
+        victim_lon = victim.get('longitude')
+        
+        if victim_lat is None or victim_lon is None:
+            continue
+
+        distance_to_rescuer = haversine(rescuer_lat, rescuer_lon, victim_lat, victim_lon)
+
+        if distance_to_rescuer <= operational_radius_km:
+            dob = victim.get("dateOfBirth")
+            age = calculate_age(dob)
+            age_score = 1.0 if age < 15 or age > 60 else 0.5
+            
+            gender = victim.get("gender", "").lower()
+            gender_score = 0.6 if gender == "female" else 0.4
+
+            individual_score = (0.5 * age_score) + (0.5 * gender_score)
+            
+            scored_nearby_victims.append({
+                **victim,
+                'age': age, # Store calculated age for later use
+                'individual_score': individual_score,
+            })
+
+    if not scored_nearby_victims:
+        return []
+
+    # 2. Group Victims into Clusters
+    clusters = []
+    unclustered_victims = list(scored_nearby_victims)
+
+    while unclustered_victims:
+        seed_victim = unclustered_victims.pop(0)
+        current_cluster_victims = [seed_victim]
+        victims_to_move = [] 
+
+        for victim in unclustered_victims:
+            dist_to_seed_km = haversine(
+                seed_victim['latitude'], seed_victim['longitude'],
+                victim['latitude'], victim['longitude']
+            )
+            if dist_to_seed_km * 1000 <= cluster_radius_m:
+                current_cluster_victims.append(victim)
+                victims_to_move.append(victim)
+        
+        for victim_to_move in victims_to_move:
+            unclustered_victims.remove(victim_to_move)
+
+        clusters.append(current_cluster_victims)
+
+    # 3. Calculate Final Score and Summarize Each Cluster
+    prioritized_clusters = []
+    for cluster_data in clusters:
+        if not cluster_data: continue
+
+        total_individual_score = sum(v['individual_score'] for v in cluster_data)
+        num_people_in_cluster = len(cluster_data)
+        final_cluster_score = total_individual_score * num_people_in_cluster
+
+        center_lat = sum(v['latitude'] for v in cluster_data) / num_people_in_cluster
+        center_lon = sum(v['longitude'] for v in cluster_data) / num_people_in_cluster
+
+        # --- NEW: Summarize victim demographics ---
+        male_count = 0
+        female_count = 0
+        kid_count = 0
+        for victim in cluster_data:
+            if victim.get('gender', '').lower() == 'male':
+                male_count += 1
+            elif victim.get('gender', '').lower() == 'female':
+                female_count += 1
+            
+            # Use pre-calculated age
+            if victim.get('age', 99) < 16:
+                kid_count += 1
+        
+        # Append the summarized data instead of the full victim list
+        # Format as a string: "score-centerlat-centerlon-male-female-kid"
+        cluster_str = f"{final_cluster_score}-{center_lat}-{center_lon}-{male_count}-{female_count}-{kid_count}"
+        prioritized_clusters.append(cluster_str)
+
+        return "|".join(prioritized_clusters)
+
+    # 4. Sort Clusters by Priority
+    # prioritized_clusters.sort(key=lambda x: x['cluster_priority_score'], reverse=True)
+
+    # return prioritized_clusters
+
+
 
