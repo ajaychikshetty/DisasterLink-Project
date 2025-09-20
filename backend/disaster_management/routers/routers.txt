@@ -1,0 +1,1822 @@
+communication.py:
+from fastapi import APIRouter, HTTPException
+from firebase import db
+from config import settings
+from schemas.communication import StatusUpdate, Broadcast
+# from utils.sms import send_sms
+from utils.geo import haversine
+
+router = APIRouter(prefix="/api", tags=["Communication"])
+
+# User status update
+@router.post("/users/{userId}/status")
+def update_status(userId: str, status: StatusUpdate):
+    ref = db.collection(settings.FIREBASE_COLLECTION_USERS).document(userId)
+    doc = ref.get()
+    if not doc.exists:
+        raise HTTPException(status_code=404, detail="User not found")
+    ref.update({"status": status.status})
+    return {"userId": userId, "status": status.status, "message": "Status updated successfully"}
+
+
+
+
+
+# Broadcast
+@router.post("/broadcast")
+def broadcast(b: Broadcast):
+    users = db.collection(settings.FIREBASE_COLLECTION_USERS).stream()
+    recipients = []
+    if b.area:
+        for u in users:
+            data = u.to_dict()
+            print(data)
+            dist = haversine(
+                b.area["latitude"], b.area["longitude"],
+                data["location"]["latitude"], data["location"]["longitude"]
+            )
+            if dist <= b.area["radius"]:
+                recipients.append(data["contactNo"])
+    else:
+        recipients = [u.to_dict()["contactNo"] for u in users]
+    
+    if not recipients:
+        return {"message": "No users found in target area", "recipients": 0}
+    
+    send_sms(recipients, b.message)
+    return {"message": "Broadcast sent successfully.", "recipients": len(recipients)}
+
+
+incidents.py:
+from fastapi import APIRouter, Depends, HTTPException, status
+from schemas.incident import IncidentCreate, IncidentResponse
+from firebase import db
+# from core.auth import get_current_user
+
+router = APIRouter(prefix="/api/incidents", tags=["Incidents"])
+
+@router.post("/", response_model=IncidentResponse, status_code=status.HTTP_201_CREATED)
+# async def create_incident(incident: IncidentCreate, current_user: dict = Depends(get_current_user)):
+async def create_incident(incident: IncidentCreate): #, current_user: dict = Depends(get_current_user)):
+    if not db:
+        raise HTTPException(500, "DB not connected")
+
+    inc_ref = db.collection("incidents").document()
+    inc_id = inc_ref.id
+
+    data = incident.model_dump()
+    data["incidentId"] = inc_id
+    data["status"] = "Active"
+
+    inc_ref.set(data)
+    return data
+
+
+maps.py:
+import json
+from fastapi import APIRouter, Query
+from firebase import db
+from config import settings
+from fastapi.responses import FileResponse, JSONResponse
+import os
+from shapely.geometry import shape, box
+
+
+
+router = APIRouter(prefix="/api/map", tags=["Maps"])
+
+
+@router.get("/coverage")
+def map_coverage(
+    min_lat: float = Query(..., description="Southwest corner latitude"),
+    min_lon: float = Query(..., description="Southwest corner longitude"),
+    max_lat: float = Query(..., description="Northeast corner latitude"),
+    max_lon: float = Query(..., description="Northeast corner longitude")
+):
+    """
+    Returns all users, rescue teams (with members), and shelters
+    within the given bounding box.
+    """
+
+    def in_box(lat, lon):
+        return min_lat <= lat <= max_lat and min_lon <= lon <= max_lon
+
+    # --- Users ---
+    users = []
+    for u in db.collection(settings.FIREBASE_COLLECTION_USERS).stream():
+        data = u.to_dict()
+        loc = data.get("location", {})
+        if "latitude" in loc and "longitude" in loc and in_box(loc["latitude"], loc["longitude"]):
+            users.append(data)
+
+    # --- Rescue Teams + Members ---
+    rescue_teams = []
+    for team in db.collection(settings.FIREBASE_COLLECTION_RESCUE_TEAMS).stream():
+        team_data = team.to_dict()
+        team_loc = team_data.get("location", {})
+        if "latitude" in team_loc and "longitude" in team_loc and in_box(team_loc["latitude"], team_loc["longitude"]):
+            # fetch team members (if they exist)
+            members = []
+            for m in db.collection(settings.FIREBASE_COLLECTION_RESCUE_MEMBERS).where("teamId", "==", team_data["id"]).stream():
+                members.append(m.to_dict())
+            team_data["members"] = members
+            rescue_teams.append(team_data)
+
+    # --- Shelters ---
+    shelters = []
+    for s in db.collection(settings.FIREBASE_COLLECTION_SHELTERS).stream():
+        data = s.to_dict()
+        loc = data.get("location", {})
+        if "latitude" in loc and "longitude" in loc and in_box(loc["latitude"], loc["longitude"]):
+            shelters.append(data)
+
+    return {
+        "users": users,
+        "rescueTeams": rescue_teams,
+        "shelters": shelters
+    }
+
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+STATIC_DIR = os.path.join(BASE_DIR, "../static")
+
+@router.get("/mumbai-map")
+async def get_mumbai_map():
+    # file_path = os.path.join(STATIC_DIR, "mumbai-wards-map.geojson")
+    file_path = os.path.join(STATIC_DIR, "mergedfile.geojson")
+    if os.path.exists(file_path):
+        return FileResponse(file_path, media_type="application/geo+json")
+    return {"error": "File not found"}
+
+
+
+
+
+
+@router.get("/boundaries")
+def get_boundaries(zoom: int, bounds: str):
+    """
+    Selects a GeoJSON file based on zoom level and filters its features
+    to only include those that intersect with the current map viewport.
+    """
+    try:
+        # The bounds string from the frontend is URL-encoded JSON
+        bounds_data = json.loads(bounds)
+        
+        # Create a bounding box from the map's corner coordinates
+        bbox = box(
+            bounds_data["_southWest"]["lng"],
+            bounds_data["_southWest"]["lat"],
+            bounds_data["_northEast"]["lng"],
+            bounds_data["_northEast"]["lat"],
+        )
+    except (json.JSONDecodeError, KeyError) as e:
+        return JSONResponse(status_code=400, content={"error": f"Invalid bounds format: {e}"})
+
+    # --- Strategy for progressive loading ---
+    if 3 <= zoom <= 5:
+        file_name = "india_boundary.geojson"
+    elif 6 <= zoom <= 8:
+        file_name = "india_states.geojson"
+    elif 9 <= zoom <= 11:
+        file_name = "india_districts.geojson"
+    else: # zoom 12+
+        # NOTE: You don't have a city/ward file, so we use the most detailed one available.
+        file_name = "india_subdistricts.geojson"
+    
+    file_path = os.path.join(STATIC_DIR, "geojson", file_name)
+    print(f"Loading GeoJSON file: {file_path}")
+    if not os.path.exists(file_path):
+        return JSONResponse(status_code=404, content={"error": f"File not found: {file_name}"})
+
+    with open(file_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    # Filter features to only those intersecting with the current map view
+    filtered_features = [
+        feat for feat in data.get("features", [])
+        if shape(feat["geometry"]).intersects(bbox)
+    ]
+    
+    # Construct a new valid GeoJSON FeatureCollection
+    filtered_geojson = {
+        "type": "FeatureCollection",
+        "features": filtered_features,
+    }
+    
+    return JSONResponse(content=filtered_geojson)
+
+messages.py:
+from fastapi import APIRouter, HTTPException, status
+from firebase import db
+from schemas.messages import MessageBase, Location
+from typing import List
+from config import settings
+
+router = APIRouter(prefix="/api/messages", tags=["Messages"])
+
+@router.get("/", response_model=List[MessageBase])
+async def get_all_messages():
+    if not db:
+        raise HTTPException(500, "Database not connected.")
+
+    messages_ref = db.collection(settings.FIREBASE_COLLECTION_MESSAGES)
+    messages = messages_ref.stream()
+
+    messages_list = []
+
+    for message in messages:
+        message_data = message.to_dict()
+
+        # Convert GeoPoint to Location dict
+        geo_point = message_data.get("location")
+        if geo_point:
+            message_data["location"] = {
+                "latitude": geo_point.latitude,
+                "longitude": geo_point.longitude
+            }
+
+        messages_list.append(MessageBase.model_validate(message_data))
+
+    return messages_list
+
+
+@router.get("/{message_id}", response_model=MessageBase)
+async def get_message(message_id: str):
+    if not db:
+        raise HTTPException(500, "Database not connected.")
+
+    message_ref = db.collection(settings.FIREBASE_COLLECTION_MESSAGES).document(message_id)
+    message_doc = message_ref.get()
+
+    if not message_doc.exists:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Message not found.")
+
+    message_data = message_doc.to_dict()
+
+    # Convert GeoPoint to Location dict
+    geo_point = message_data.get("location")
+    if geo_point:
+        message_data["location"] = {
+            "lat": geo_point.latitude,
+            "lng": geo_point.longitude
+        }
+
+    return MessageBase.model_validate(message_data)
+
+
+otp.py:
+# app/otp.py
+import random, time
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
+from .sms_queue import sms_queue
+
+router = APIRouter()
+
+# In-memory OTP store: { phone_number: {otp: str, expires: timestamp} }
+otp_store = {}
+
+class PhoneRequest(BaseModel):
+    phone_number: str
+
+class VerifyRequest(BaseModel):
+    phone_number: str
+    otp: str
+
+@router.post("/request_otp")
+def request_otp(req: PhoneRequest):
+    otp = str(random.randint(100000, 999999))  # 6 digit OTP
+    expiry = time.time() + 300  # 5 minutes
+
+    otp_store[req.phone_number] = {"otp": otp, "expires": expiry}
+
+    # enqueue SMS for Flutter gateway
+    sms_queue.append({"number": req.phone_number, "msg": f"Your OTP is {otp}"})
+
+    return {"status": "ok", "message": f"OTP sent to {req.phone_number}"}
+
+@router.post("/verify_otp")
+def verify_otp(req: VerifyRequest):
+    record = otp_store.get(req.phone_number)
+
+    if not record:
+        raise HTTPException(status_code=400, detail="No OTP requested")
+
+    if time.time() > record["expires"]:
+        del otp_store[req.phone_number]
+        raise HTTPException(status_code=400, detail="OTP expired")
+
+    if req.otp != record["otp"]:
+        raise HTTPException(status_code=400, detail="Invalid OTP")
+
+    del otp_store[req.phone_number]  # OTP is one-time use
+    return {"status": "ok", "message": "OTP verified"}
+
+
+rescuers.py:
+# disaster_management/routers/rescuers.py
+
+from fastapi import APIRouter, HTTPException
+from firebase import db
+from config import settings
+from schemas.rescue import (
+    RescueMemberCreate,
+    RescueMemberResponse,
+)
+from firebase_admin import auth
+
+router = APIRouter(prefix="/api", tags=["Rescuers"])
+
+# ================== Rescue Members ==================
+
+# Create a rescue member (auto Firestore ID)
+@router.post("/rescuemembers", response_model=RescueMemberResponse)
+def create_rescue_member(member: RescueMemberCreate):
+    """
+    Creates a user in Firebase Auth and a corresponding document in Firestore.
+    The document ID in Firestore is the user's email.
+    """
+    # Step 1: Create the user in Firebase Authentication
+    try:
+        user_record = auth.create_user(
+            email=member.email,
+            password="Password@123"  # Hardcoded password as requested
+        )
+    except auth.EmailAlreadyExistsError:
+        # If the email is already in use, return a conflict error
+        raise HTTPException(
+            status_code=409,
+            detail=f"An authentication account with email '{member.email}' already exists."
+        )
+    except Exception as e:
+        # Handle other potential errors from Firebase
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to create authentication user: {str(e)}"
+        )
+
+    # Step 2: Use the email as the document ID for the Firestore record
+    ref = db.collection(settings.FIREBASE_COLLECTION_RESCUERS).document(member.email)
+    
+    # Check if a document with this ID already exists in Firestore (optional but recommended)
+    if ref.get().exists:
+        # If you reach here, it means the auth user was just created but the firestore doc
+        # somehow exists. This indicates an inconsistent state.
+        # You might want to delete the newly created auth user before raising the error.
+        auth.delete_user(user_record.uid)
+        raise HTTPException(
+            status_code=409,
+            detail=f"A rescuer profile with ID '{member.email}' already exists in the database."
+        )
+
+    # Step 3: Prepare and save the data to Firestore
+    data = member.dict()
+    data.update({
+        "id": member.email,      # Use email as the ID field within the document
+        "auth_uid": user_record.uid, # Store the auth UID to link the records
+        "status": "Free",
+        "teamId": None,
+        "teamName": None
+    })
+    
+    ref.set(data)
+    
+    return data
+
+
+
+
+
+
+
+
+# Get a rescue member
+@router.get("/rescuemembers/{member_id}", response_model=RescueMemberResponse)
+def get_rescue_member(member_id: str):
+    doc = db.collection(settings.FIREBASE_COLLECTION_RESCUERS).document(member_id).get()
+    if not doc.exists:
+        raise HTTPException(status_code=404, detail="Rescue member not found")
+    return doc.to_dict()
+
+
+# List all rescue members
+@router.get("/rescuemembers", response_model=list[RescueMemberResponse])
+def list_rescue_members():
+    members_stream = db.collection(settings.FIREBASE_COLLECTION_RESCUERS).stream()
+    
+    response_list = []
+    for member_doc in members_stream:
+        # Convert the Firestore document to a dictionary
+        member_data = member_doc.to_dict()
+        
+        # Get latitude and longitude from the dictionary
+        latitude = member_data.get("latitude")
+        longitude = member_data.get("longitude")
+        
+        # If both latitude and longitude exist, create a nested 'location' object
+        if latitude is not None and longitude is not None:
+            member_data["location"] = {"latitude": latitude, "longitude": longitude}
+        else:
+            member_data["location"] = None
+            
+        response_list.append(member_data)
+        
+    return response_list
+
+# Update a rescue member
+@router.put("/rescuemembers/{member_id}", response_model=RescueMemberResponse)
+def update_rescue_member(member_id: str, member: RescueMemberCreate):
+    ref = db.collection(settings.FIREBASE_COLLECTION_RESCUERS).document(member_id)
+    if not ref.get().exists:
+        raise HTTPException(status_code=404, detail="Rescue member not found")
+    
+    update_data = member.dict()
+    ref.update(update_data)
+    return ref.get().to_dict()
+
+
+# Delete rescue member
+@router.delete("/rescuemembers/{member_id}")
+def delete_rescue_member(member_id: str):
+    ref = db.collection(settings.FIREBASE_COLLECTION_RESCUERS).document(member_id)
+    if not ref.get().exists:
+        raise HTTPException(status_code=404, detail="Rescue member not found")
+    ref.delete()
+    return {"message": "Rescue member deleted successfully"}
+
+
+# List only free rescuers not assigned to any team
+@router.get("/rescuemembers/available", response_model=list[RescueMemberResponse])
+def list_available_rescue_members():
+    members_ref = db.collection(settings.FIREBASE_COLLECTION_RESCUERS)
+    available_members = (
+        members_ref.where("status", "==", "Free")
+                   .where("teamId", "==", None)
+                   .stream()
+    )
+    return [m.to_dict() for m in available_members]
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# rescuer sms:
+from datetime import datetime
+from pytz import timezone
+
+def update_rescuer_location(lat: float, lon: float, id: str):
+    # get id==phone from victims collection    
+    # remove leading + from id if present
+    # update the victim document
+    print("inside update_rescuer_location")
+    print("id:", id)
+    print("lat:", lat)
+    print("lon:", lon)
+
+    doc_ref = db.collection(settings.FIREBASE_COLLECTION_RESCUERS).document(id)
+    ist = timezone('Asia/Kolkata')
+    now_ist = datetime.now(ist)
+    victim_data = {
+        "latitude": lat,
+        "longitude": lon,
+        "updatedAt": int(now_ist.timestamp() * 1000)
+    }
+    doc_ref.update(victim_data)
+
+
+
+
+rescue_ops.py:
+# backend/app/routes/rescue_ops.py
+
+from fastapi import APIRouter, HTTPException, Body
+from firebase_admin import firestore
+from firebase import db
+from config import settings
+from schemas import victims
+from schemas.rescue import (
+    RescueTeamCreate, 
+    RescueTeamResponse, 
+    RescueTeamUpdate, 
+    LeaderInfo,
+    TeamStatus
+)
+from uuid import uuid4
+from typing import List
+from math import radians, cos, sin, asin, sqrt
+from routers.sms import send_sms
+
+
+router = APIRouter(prefix="/api", tags=["Rescue Ops"])
+
+def _fetch_rescuers_data(rescuer_ids: list) -> dict:
+    """Helper function to fetch rescuer data in batches."""
+    if not rescuer_ids:
+        return {}
+    
+    rescuers_map = {}
+    # Firestore 'in' query supports up to 30 elements
+    for i in range(0, len(rescuer_ids), 30):
+        batch_ids = rescuer_ids[i:i+30]
+        rescuers_query = db.collection(settings.FIREBASE_COLLECTION_RESCUERS).where("id", "in", batch_ids).stream()
+        for rescuer in rescuers_query:
+            rescuer_data = rescuer.to_dict()
+            rescuers_map[rescuer_data["id"]] = rescuer_data
+    return rescuers_map
+
+def _construct_team_response(team_doc: firestore.DocumentSnapshot) -> dict:
+    """Helper function to construct the detailed team response, including nearby victims."""
+    team_data = team_doc.to_dict()
+    if not team_data:
+        return None
+
+    leader_id = team_data.get("leader")
+    member_ids = team_data.get("members", [])
+    all_rescuer_ids = list(set([leader_id] + member_ids) - {None})
+
+    rescuers_data = _fetch_rescuers_data(all_rescuer_ids)
+
+    # Construct leader info
+    leader_info = None
+    if leader_id and leader_id in rescuers_data:
+        leader_data = rescuers_data[leader_id]
+        leader_info = LeaderInfo(
+            id=leader_id,
+            name=leader_data.get("name"),
+            latitude=leader_data.get("latitude"),
+            longitude=leader_data.get("longitude")
+        )
+
+    # Construct members dictionary
+    members_dict = {
+        member_id: rescuers_data.get(member_id, {}).get("name")
+        for member_id in member_ids
+    }
+
+    # Find victims within 5km of assigned location
+    assigned_lat = team_data.get("assignedLatitude")
+    assigned_lon = team_data.get("assignedLongitude")
+    nearby_victims = []
+    if assigned_lat is not None and assigned_lon is not None:
+        victims_ref = db.collection(settings.FIREBASE_COLLECTION_VICTIMS).where("isActive", "==", True)
+        victims_docs = victims_ref.stream()
+        victims = []
+        for victim in victims_docs:
+            victim_data = victim.to_dict()
+            if victim_data.get("isActive") is True:
+                victims.append(victim_data)
+        nearby_victims = find_nearest_victims(assigned_lat, assigned_lon, victims)
+
+    return RescueTeamResponse(
+        teamId=team_data["teamId"],
+        teamName=team_data.get("teamName"),
+        leader=leader_info,
+        members=members_dict,
+        status=team_data.get("status", TeamStatus.UNKNOWN),
+        assignedLatitude=team_data.get("assignedLatitude"),
+        assignedLongitude=team_data.get("assignedLongitude"),
+        teamAddress=get_address_from_latlong(team_data.get("assignedLatitude"), team_data.get("assignedLongitude")),
+        victimsNearby=nearby_victims
+    ).dict()
+
+@router.post("/rescue-ops/teams", response_model=RescueTeamResponse, status_code=201)
+def create_team(team: RescueTeamCreate):
+    """Creates a new rescue team."""
+    team_id = str(uuid4())
+    members = set(team.members)
+    if team.leader:
+        members.add(team.leader)
+
+    team_data = {
+        "teamId": team_id,
+        "teamName": team.teamName,
+        "leader": team.leader,
+        "members": list(members),
+        "status": TeamStatus.FREE.value,
+        "assignedLatitude": None,
+        "assignedLongitude": None
+    }
+    
+    team_ref = db.collection(settings.FIREBASE_COLLECTION_RESCUE_TEAMS).document(team_id)
+    team_ref.set(team_data)
+
+    # Update teamId for all members
+    for member_id in members:
+        try:
+            db.collection(settings.FIREBASE_COLLECTION_RESCUERS).document(member_id).update({
+                "teamId": team_id,
+                "teamName": team.teamName,
+                "status": TeamStatus.ASSIGNED.value
+            })
+        except Exception:
+            pass # Ignore if a rescuer doesn't exist
+
+    return _construct_team_response(team_ref.get())
+
+@router.get("/rescue-ops/teams", response_model=List[RescueTeamResponse])
+def list_teams():
+    """Lists all rescue teams with enriched leader and member data."""
+    teams_stream = db.collection(settings.FIREBASE_COLLECTION_RESCUE_TEAMS).stream()
+    return [_construct_team_response(team_doc) for team_doc in teams_stream]
+
+@router.get("/rescue-ops/teams/{team_id}", response_model=RescueTeamResponse)
+def get_team(team_id: str):
+    """Retrieves a single team by its ID with enriched data."""
+    team_doc = db.collection(settings.FIREBASE_COLLECTION_RESCUE_TEAMS).document(team_id).get()
+    if not team_doc.exists:
+        raise HTTPException(status_code=404, detail="Team not found")
+    return _construct_team_response(team_doc)
+
+@router.put("/rescue-ops/teams/{team_id}", response_model=RescueTeamResponse)
+def update_team(team_id: str, team_update: RescueTeamUpdate):
+    """Updates a team's information."""
+    team_ref = db.collection(settings.FIREBASE_COLLECTION_RESCUE_TEAMS).document(team_id)
+    if not team_ref.get().exists:
+        raise HTTPException(status_code=404, detail="Team not found")
+
+    update_data = team_update.dict(exclude_unset=True)
+    
+    # Ensure leader is always in members list if members are being updated
+    if 'members' in update_data and 'leader' in update_data:
+        if update_data['leader'] not in update_data['members']:
+            update_data['members'].append(update_data['leader'])
+    # update the status and teamId and teamName of all members
+    if 'members' in update_data or 'leader' in update_data or 'teamName' in update_data:
+        team_doc = team_ref.get().to_dict()
+        new_members = set(update_data.get('members', team_doc.get('members', [])))
+        new_leader = update_data.get('leader', team_doc.get('leader'))
+        if new_leader:
+            new_members.add(new_leader)
+        new_team_name = update_data.get('teamName', team_doc.get('teamName'))
+
+        # Fetch current members to identify removals
+        current_members = set(team_doc.get('members', []))
+        if team_doc.get('leader'):
+            current_members.add(team_doc.get('leader'))
+
+        # Members to be removed
+        members_to_remove = current_members - new_members
+        for member_id in members_to_remove:
+            try:
+                db.collection(settings.FIREBASE_COLLECTION_RESCUERS).document(member_id).update({
+                    "teamId": None,
+                    "teamName": None,
+                    "status": TeamStatus.FREE.value
+                })
+            except Exception:
+                pass # Ignore if a rescuer doesn't exist
+
+        # Update new members with the latest team info
+        for member_id in new_members:
+            try:
+                db.collection(settings.FIREBASE_COLLECTION_RESCUERS).document(member_id).update({
+                    "teamId": team_id,
+                    "teamName": new_team_name,
+                    "status": TeamStatus.ASSIGNED.value
+                })
+            except Exception:
+                pass # Ignore if a rescuer doesn't exist
+
+    team_ref.update(update_data)
+    return _construct_team_response(team_ref.get())
+
+
+@router.delete("/rescue-ops/teams/{team_id}", status_code=204)
+def delete_team(team_id: str):
+    """Deletes a rescue team and unlinks its members."""
+    team_ref = db.collection(settings.FIREBASE_COLLECTION_RESCUE_TEAMS).document(team_id)
+    team_doc = team_ref.get()
+    if not team_doc.exists:
+        raise HTTPException(status_code=404, detail="Team not found")
+
+    # Unlink members from the team
+    team_data = team_doc.to_dict()
+    for member_id in team_data.get("members", []):
+        try:
+            db.collection(settings.FIREBASE_COLLECTION_RESCUERS).document(member_id).update({
+                "teamId": None,
+                "teamName": None,
+                "status": TeamStatus.FREE.value
+            })
+        except Exception:
+            pass
+            
+    team_ref.delete()
+    return None
+
+
+@router.post("/rescue-ops/teams/{team_id}/assign", response_model=RescueTeamResponse)
+def assign_team(team_id: str, latitude: float = Body(...), longitude: float = Body(...)):
+    """Assigns a free team to a specific location."""
+    team_ref = db.collection(settings.FIREBASE_COLLECTION_RESCUE_TEAMS).document(team_id)
+    team_doc = team_ref.get()
+    if not team_doc.exists:
+        raise HTTPException(status_code=404, detail="Team not found")
+
+    if team_doc.to_dict().get("status") != TeamStatus.FREE.value:
+        raise HTTPException(status_code=400, detail="Team is not available for assignment.")
+
+    team_ref.update({
+        "status": TeamStatus.ASSIGNED.value,
+        "assignedLatitude": latitude,
+        "assignedLongitude": longitude
+    })
+
+    # send sms to all team members with the assigned location details
+    # get all team members
+    try:
+        team_data = team_ref.get().to_dict()
+        member_ids = team_data.get("members", [])
+        for member_id in member_ids:
+            # get phone number of the member
+            rescuer_ref = db.collection(settings.FIREBASE_COLLECTION_RESCUERS).document(member_id)
+            rescuer_doc = rescuer_ref.get()
+            if not rescuer_doc.exists:
+                continue
+            rescuer_data = rescuer_doc.to_dict()
+            phone_number = rescuer_data.get("phone")
+            print(":::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::")
+            address = get_address_from_latlong(latitude, longitude)
+            print(":::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::")
+            message = f'DISASTERLINKx9050 {{"msg": "99", "lat": {latitude}, "lon": {longitude}, "address": "{address}"}}'
+            # send_sms(phone_number, message)
+            # print(address)
+
+            # user list of all victims to be send in sms:
+            # get users within 5km radius of the assigned location
+            victims_ref = db.collection(settings.FIREBASE_COLLECTION_VICTIMS).where("isActive", "==", True)
+            victims_docs = victims_ref.stream()
+            victims = []
+            for victim in victims_docs:
+                victim_data = victim.to_dict()
+                if victim_data.get("isActive") is True:
+                    victims.append(victim_data)
+            nearest_victims = find_nearest_victims(latitude, longitude, victims)
+            if not nearest_victims:
+                continue
+
+            # Send the list of nearest victims to the rescuer via SMS
+            for victim in nearest_victims:
+                victim_list_str = f'{victim.get("phoneNumber","N/A")},{victim.get("name","N/A")},{victim.get("dateOfBirth","N/A")},{victim.get("status","N/A")};'
+                victim_list_message = f'DISASTERLINKx9050 {{"msg": "98", "victim": "{victim_list_str}"}}'
+                send_sms(phone_number, victim_list_message)
+                print(victim_list_message)
+            # victim_list_message = f'DISASTERLINKx9050 {{"msg": "98", "victims": "{victim_list_str}"}}'
+
+            
+
+    except Exception as e:
+        print(f"Error sending SMS to team members: {e}")
+
+    return _construct_team_response(team_ref.get())
+
+
+@router.post("/rescue-ops/teams/{team_id}/unassign", response_model=RescueTeamResponse)
+def unassign_team(team_id: str):
+    """Unassigns a team by setting its assigned location to null and changing its status to FREE."""
+    team_ref = db.collection(settings.FIREBASE_COLLECTION_RESCUE_TEAMS).document(team_id)
+    team_doc = team_ref.get()
+    
+    if not team_doc.exists:
+        raise HTTPException(status_code=404, detail="Team not found")
+    
+    if team_doc.to_dict().get("status") != TeamStatus.ASSIGNED.value:
+        raise HTTPException(status_code=400, detail="Team is not currently assigned.")
+    
+    team_ref.update({
+        "status": TeamStatus.FREE.value,
+        "assignedLatitude": None,
+        "assignedLongitude": None
+    })
+    
+    return _construct_team_response(team_ref.get())
+
+
+
+
+
+
+
+
+# sms rescue ops 
+@router.get("/rescue-ops/send-victim-list")
+# def sendVictimListToTeamMember(rescuerId: str):
+def sendVictimListToTeamMember():
+    rescuerId = "3tboDV5EDgSGnSInKv8l"
+    # first get the assigned team of that member, then get team assigned location in lat long
+    # use haversine distance with between assigned location and all victims location to get nearest victims (range of 5km)
+    # send that list to the rescuer using sms
+
+    # get team of that member
+    doc_ref = db.collection(settings.FIREBASE_COLLECTION_RESCUERS).document(rescuerId)
+    doc = doc_ref.get()
+    if not doc.exists:
+        raise HTTPException(status_code=404, detail="Rescuer not found")
+    rescuer_data = doc.to_dict()
+    teamId = rescuer_data.get("teamId")
+    if not teamId:
+        raise HTTPException(status_code=400, detail="Rescuer is not assigned to any team")
+    
+
+    # get team assigned location
+    team_ref = db.collection(settings.FIREBASE_COLLECTION_RESCUE_TEAMS).document(teamId)
+    team_doc = team_ref.get()
+    if not team_doc.exists:
+        raise HTTPException(status_code=404, detail="Team not found")
+    team_data = team_doc.to_dict()
+    assigned_lat = team_data.get("assignedLatitude")
+    assigned_lon = team_data.get("assignedLongitude")
+    if assigned_lat is None or assigned_lon is None:
+        raise HTTPException(status_code=400, detail="Team is not assigned to any location")
+    
+    # get all victims
+    victims_ref = db.collection(settings.FIREBASE_COLLECTION_VICTIMS).where("isActive", "==", True)
+    victims_docs = victims_ref.stream()
+    victims = []
+    for victim in victims_docs:
+        victim_data = victim.to_dict()
+        if victim_data.get("isActive") is True:
+            victims.append(victim_data)
+
+   # find nearest victims
+    nearest_victims = find_nearest_victims(assigned_lat, assigned_lon, victims)
+    if not nearest_victims:
+       raise HTTPException(status_code=404, detail="No active victims found nearby")
+
+    # send sms to the rescuer with the list of nearest victims
+    ### LEFT 
+    print(f"Sending SMS to rescuer {rescuerId} with nearest victims: {nearest_victims}")
+    # return in Http response
+
+
+
+    # parse into a particular format
+
+
+
+    return {"message": f"SMS sent to rescuer {rescuerId} with nearest victims", "victims": nearest_victims}
+
+
+
+def find_nearest_victims(lat: float, lon: float, victims: list, radius_km: float = 5.0) -> list:
+    def haversine(lat1, lon1, lat2, lon2):
+        # Convert decimal degrees to radians 
+        lon1, lat1, lon2, lat2 = map(radians, [lon1, lat1, lon2, lat2])
+        # Haversine formula 
+        dlon = lon2 - lon1 
+        dlat = lat2 - lat1 
+        a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
+        c = 2 * asin(sqrt(a)) 
+        r = 6371 # Radius of earth in kilometers
+        return c * r
+
+    nearby_victims = []
+    for victim in victims:
+        v_lat = victim.get("latitude")
+        v_lon = victim.get("longitude")
+        if v_lat is not None and v_lon is not None:
+            distance = haversine(lat, lon, v_lat, v_lon)
+            if distance <= radius_km:
+                nearby_victims.append(victim)
+    
+    return nearby_victims
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+import struct
+import base64
+
+def pack_victims_to_binary_base64(victim_list: list) -> str:
+    """
+    Packs a list of victim dictionaries into a compact binary format and
+    encodes it as a Base64 string for sending via SMS.
+    
+    Expected format for each victim dict:
+    {
+        "phone": "123456789012",  # String of 12 digits
+        "name": "JaneDoe",
+        "age": 30
+    }
+    """
+    all_packed_records = []
+
+    for victim in victim_list:
+        # --- 1. Safely extract and sanitize data ---
+        # Convert the phone string to an integer. Default to 0 if missing/invalid.
+        try:
+            phone_int = int(victim.get("phone", 0))
+        except (ValueError, TypeError):
+            phone_int = 0
+            
+        # Get the name. Default to an empty string if missing.
+        name_str = victim.get("name", "")
+        
+        # Get the age. Default to 0 if missing.
+        age_int = victim.get("age", 0)
+
+        # --- 2. Encode the name and get its length ---
+        name_bytes = name_str.encode('utf-8')
+        name_length = len(name_bytes)
+        
+        # --- 3. Define the binary format for this record ---
+        # > = Big-Endian (network standard)
+        # Q = Unsigned long long (8 bytes) for the phone number
+        # B = Unsigned char (1 byte) for the name length
+        # {name_length}s = The variable-length name string itself
+        # B = Unsigned char (1 byte) for the age
+        format_string = f'> Q B {name_length}s B'
+
+        # --- 4. Pack the data into a binary chunk ---
+        try:
+            packed_record = struct.pack(format_string, phone_int, name_length, name_bytes, age_int)
+            all_packed_records.append(packed_record)
+        except struct.error as e:
+            print(f"Skipping record due to packing error: {e}. Data: {victim}")
+            continue
+
+    # --- 5. Join all chunks and encode to Base64 ---
+    final_payload_bytes = b"".join(all_packed_records)
+    final_payload_base64 = base64.b64encode(final_payload_bytes).decode('utf-8')
+    
+    return final_payload_base64
+
+
+
+
+
+
+
+
+
+
+from geopy.geocoders import Nominatim
+
+from geopy.geocoders import Nominatim
+from geopy.exc import GeocoderTimedOut, GeocoderServiceError
+
+
+
+def get_address_from_latlong(lat, long):
+    """
+    Gets a formatted address from latitude and longitude using Nominatim.
+    Includes error handling for network issues and timeouts.
+    """
+    if lat is not None and long is not None:
+        lat = round(float(lat), 4)
+        long = round(float(long), 4)
+    try:
+        geolocator = Nominatim(user_agent="disasterlink_app_v1") # Use a descriptive user agent
+        location = geolocator.reverse((lat, long), language="en", timeout=10)
+        
+        if location and location.address:
+            # Truncate address to max 55 characters
+            address = location.address
+            if len(address) > 55:
+                address = address[:52] + "..."
+            return address
+        else:
+            return "Address not found for the given coordinates."
+            
+    except GeocoderTimedOut:
+        return "Error: Geocoding service timed out."
+    except GeocoderServiceError as e:
+        return f"Error: Geocoding service error: {e}"
+    except Exception as e:
+        return f"An unexpected error occurred: {e}"
+
+
+
+shelters.py:
+# shelter route
+
+from os import name
+from fastapi import APIRouter, HTTPException
+from firebase import db
+from config import settings
+from schemas.shelter import ShelterCreate, ShelterResponse
+from schemas.user import UserResponse
+import time
+
+router = APIRouter(prefix="/api/shelters", tags=["Shelters"])
+
+
+def enrich_shelter_with_users(shelter: dict) -> dict:
+    """Attach full user details for rescuedMembers."""
+    users = []
+    for uid in shelter.get("rescuedMembers", []):
+        doc = db.collection(settings.FIREBASE_COLLECTION_USERS).document(uid).get()
+        if doc.exists:
+            users.append(UserResponse(**doc.to_dict()))
+    shelter["rescuedMembers"] = users
+    shelter["currentOccupancy"] = len(users)
+    return shelter
+
+
+# ---------- CREATE SHELTER ----------
+@router.post("", response_model=ShelterResponse)
+def create_shelter(shelter: ShelterCreate):
+    ref = db.collection(settings.FIREBASE_COLLECTION_SHELTERS).document()
+    data = shelter.dict()
+    data.update({
+        "id": ref.id,
+        "rescuedMembers": [],
+        "currentOccupancy": 0,
+        "lastUpdated": int(time.time() * 1000),
+    })
+    ref.set(data)
+    return enrich_shelter_with_users(data)
+
+
+# ---------- LIST ALL SHELTERS ----------
+@router.get("", response_model=list[ShelterResponse])
+def list_shelters():
+    shelters = db.collection(settings.FIREBASE_COLLECTION_SHELTERS).stream()
+    results = []
+    for s in shelters:
+        data = s.to_dict()
+        data["id"] = s.id
+        results.append(enrich_shelter_with_users(data))
+    return results
+
+
+# ---------- GET SHELTER BY ID ----------
+@router.get("/{shelterId}", response_model=ShelterResponse)
+def get_shelter(shelterId: str):
+    doc = db.collection(settings.FIREBASE_COLLECTION_SHELTERS).document(shelterId).get()
+    if not doc.exists:
+        raise HTTPException(status_code=404, detail="Shelter not found")
+    data = doc.to_dict()
+    data["id"] = doc.id
+    return enrich_shelter_with_users(data)
+
+
+# ---------- UPDATE SHELTER ----------
+@router.put("/{shelterId}", response_model=ShelterResponse)
+def update_shelter(shelterId: str, payload: dict):
+    ref = db.collection(settings.FIREBASE_COLLECTION_SHELTERS).document(shelterId)
+    if not ref.get().exists:
+        raise HTTPException(status_code=404, detail="Shelter not found")
+
+    payload["lastUpdated"] = int(time.time() * 1000)
+    ref.update(payload)
+
+    doc = ref.get()
+    data = doc.to_dict()
+    data["id"] = doc.id
+    return enrich_shelter_with_users(data)
+
+
+# ---------- DELETE SHELTER ----------
+@router.delete("/{shelterId}")
+def delete_shelter(shelterId: str):
+    ref = db.collection(settings.FIREBASE_COLLECTION_SHELTERS).document(shelterId)
+    if not ref.get().exists:
+        raise HTTPException(status_code=404, detail="Shelter not found")
+    ref.delete()
+    return {"message": "Shelter deleted successfully"}
+
+
+# ---------- ADD MEMBER ----------
+@router.post("/{shelterId}/add-member/{memberId}", response_model=ShelterResponse)
+def add_member_to_shelter(shelterId: str, memberId: str):
+    ref = db.collection(settings.FIREBASE_COLLECTION_SHELTERS).document(shelterId)
+    doc = ref.get()
+    if not doc.exists:
+        raise HTTPException(status_code=404, detail="Shelter not found")
+
+    shelter = doc.to_dict()
+    members = shelter.get("rescuedMembers", [])
+
+    if memberId in members:
+        raise HTTPException(status_code=400, detail="Member already in shelter")
+    if len(members) >= shelter["capacity"]:
+        raise HTTPException(status_code=400, detail="Shelter is at full capacity")
+
+    members.append(memberId)
+    shelter["rescuedMembers"] = members
+    shelter["lastUpdated"] = int(time.time() * 1000)
+    ref.update(shelter)
+
+    shelter["id"] = doc.id
+    return enrich_shelter_with_users(shelter)
+
+
+# ---------- REMOVE MEMBER ----------
+@router.post("/{shelterId}/remove-member/{memberId}", response_model=ShelterResponse)
+def remove_member_from_shelter(shelterId: str, memberId: str):
+    ref = db.collection(settings.FIREBASE_COLLECTION_SHELTERS).document(shelterId)
+    doc = ref.get()
+    if not doc.exists:
+        raise HTTPException(status_code=404, detail="Shelter not found")
+
+    shelter = doc.to_dict()
+    members = shelter.get("rescuedMembers", [])
+    if memberId not in members:
+        raise HTTPException(status_code=400, detail="Member not in shelter")
+
+    members.remove(memberId)
+    shelter["rescuedMembers"] = members
+    shelter["lastUpdated"] = int(time.time() * 1000)
+    ref.update(shelter)
+
+    shelter["id"] = doc.id
+    return enrich_shelter_with_users(shelter)
+
+
+
+
+
+
+# shelter sms:
+
+def addUserToShelter(shelterId: str, phone: str):
+    # rescuedmember[userid] = phone
+    ref = db.collection(settings.FIREBASE_COLLECTION_SHELTERS).document(shelterId)
+    doc = ref.get()
+    if not doc.exists:
+        raise HTTPException(status_code=404, detail="Shelter not found")
+
+    shelter = doc.to_dict()
+    members = shelter.get("rescuedMembers", {})
+
+    # get name from victims collection:
+    doc_ref = db.collection(settings.FIREBASE_COLLECTION_VICTIMS).document(phone)
+    victim = doc_ref.get()
+    if not victim.exists:    
+        raise HTTPException(status_code=404, detail="Victim not found")
+    
+    name = victim.to_dict().get("name", "Unknown")
+    
+    members[phone] = name
+    shelter["rescuedMembers"] = members
+    shelter["lastUpdated"] = int(time.time() * 1000)
+    ref.update(shelter)
+
+    # update the victim isActive to false:
+    doc_ref = db.collection(settings.FIREBASE_COLLECTION_VICTIMS).document(phone)
+    victim_data = {
+        "isActive": False,
+        "updatedAt": int(time.time() * 1000)
+    }
+    doc_ref.update(victim_data)
+
+
+
+
+sms.py:
+# from utils.sms import send_sms
+import datetime
+import re
+
+from flask import json
+import requests
+from fastapi import APIRouter, HTTPException, Form
+from fastapi.responses import PlainTextResponse
+from fastapi import FastAPI
+from fastapi.responses import HTMLResponse, RedirectResponse
+from pydantic import BaseModel
+from typing import List
+from firebase import db, firestore
+import math
+
+
+
+router = APIRouter(prefix="/api", tags=["SMS"])
+
+outgoing_sms_queue: List[dict] = []
+
+class SMSRequest(BaseModel):
+    number: str
+    msg: str
+router = APIRouter(prefix="/api", tags=["SMS"])
+
+@router.post("/queue_sms")
+async def queue_sms(sms: SMSRequest):
+    outgoing_sms_queue.routerend({"number": sms.number, "msg": sms.msg})
+    return {"status": "queued", "to": sms.number, "msg": sms.msg}
+
+@router.get("/get_sms")
+async def get_sms():
+    if outgoing_sms_queue:
+        return outgoing_sms_queue.pop(0)
+    return {"status": "empty"}
+
+
+
+# CALCULATING DISTANCEEEE
+
+def haversine_distance(lat1, lon1, lat2, lon2):
+    R = 6371  # km
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    a = math.sin(dlat/2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon/2)**2
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
+    return R*c
+
+def get_nearest_shelters(user_location, top_n=1): 
+    db = firestore.client()
+    shelters_ref = db.collection('shelters')
+    
+    nearest_shelters = []
+    
+    for doc in shelters_ref.stream():
+        data = doc.to_dict()
+        # Check if 'lat' and 'lon' exist
+        if 'latitude' in data and 'longitude' in data:
+            dist = haversine_distance(
+                user_location.latitude, user_location.longitude,
+                data['latitude'], data['longitude']
+            )
+            data['distance_km'] = dist
+            data['id'] = doc.id
+            nearest_shelters.append(data)
+        else:
+            print(f"Skipping {doc.id}, missing lat/lon")
+    
+    # Sort by distance
+    nearest_shelters.sort(key=lambda x: x['distance_km'])
+    return nearest_shelters[:top_n]
+
+
+def send_REPLY(to: str, lat: float, lon: float, type: int):
+    match type:
+        case 102:
+            base_msg = "DISASTERLINKx9040 101 !\n"
+
+            # Construct user location
+            user_loc = firestore.GeoPoint(lat, lon)
+            top3 = get_nearest_shelters(user_loc)
+
+            # Format shelters info as readable plain text
+            shelters_lines = []
+            for shelter in top3:
+                line = f"{shelter['name']} {round(shelter['distance_km'], 2)} km, {shelter.get('latitude','N/A')},{shelter.get('longitude','N/A')}, {shelter.get('contactNumber','N/A')}"
+                shelters_lines.append(line)
+
+            # Combine into final message
+            final_msg = base_msg + "Nearest shelters:\n" + "\n".join(shelters_lines)
+            print(final_msg)
+
+            # Send SMS
+            send_sms(to, final_msg)
+
+            # Optionally, return dict for logging
+            return {
+                "msg": base_msg.strip(),
+                "nearest_shelters": top3
+            }
+            
+
+
+# @router.post("/receive_sms")
+# async def receive_sms(data: dict):
+#     print(f"📥 Incoming SMS from {data.get('from')}: {data.get('msg')}")
+
+#     # Extract fields from incoming data
+#     message_text = data.get("msg", "")
+#     sender = data.get("from", "")
+#     match = re.search(r'\{.*\}$', message_text)   # matches from { to end of string
+#     if match:
+#         json_str = match.group(0)
+#         data = json.loads(json_str)
+#         latitude=data['lat']
+#         longitude=data['lon']
+
+#         # Create GeoPoint object
+#         location = firestore.GeoPoint(latitude, longitude) if latitude and longitude else None
+
+#         # Prepare document data
+#         doc_data = {
+#             "Message": data['msg'],
+#             "Sender": sender,
+#             "Timestamp": firestore.SERVER_TIMESTAMP ,
+#             "Type": int(data['sos']),
+#             "Battery": data['bat'],
+#             "location": location
+#         }
+
+#         # Add document to 'Messages' collection
+#         db.collection("Messages").add(doc_data)
+#         send_REPLY(sender,latitude,longitude,int(data['sos']))
+#         return {"status": "received"}
+#     else:
+#         print("No JSON found in the message.")
+
+
+    
+
+#     # return {"status": "received"}
+
+# ✅ Simple HTML Form to send SMS
+@router.get("/test-sms", response_class=HTMLResponse)
+async def form_page():
+    return """
+    <html>
+        <head><title>SMS Gateway</title></head>
+        <body>
+            <h2>📡 Send SMS</h2>
+            <form action="/api/send_form" method="post">
+                <label>Phone Number:</label>
+                <input type="text" name="number" required><br><br>
+                <label>Message:</label>
+                <textarea name="msg" rows="4" cols="30" required></textarea><br><br>
+                <button type="submit">Send SMS</button>
+            </form>
+        </body>
+    </html>
+    """
+
+@router.post("/send_form")
+async def send_form(number: str = Form(...), msg: str = Form(...)):
+    outgoing_sms_queue.append({"number": number, "msg": msg})
+    return RedirectResponse("/api/test-sms", status_code=303)
+
+API_URL = "https://yourowncustommessagingservice.onrender.com/queue_sms"
+
+def send_sms(to: str, msg: str) -> dict:
+    """
+    Queue an SMS message.
+
+    Args:
+        to (str): Recipient phone number (with country code, e.g., +91XXXXXXXXXX)
+        msg (str): Message text
+
+    Returns:
+        dict: Response from the API
+    """
+    payload = {
+        "number": to,
+        "msg": msg
+    }
+    try:
+        response = requests.post(API_URL, json=payload)
+        response.raise_for_status() 
+        print("MSSG SENT") # Raise error if HTTP status != 200
+        return response.json()
+    except requests.RequestException as e:
+        print("Error sending SMS:", e)
+        return {"status": "error", "error": str(e)}
+
+
+
+class DisasterAlertRequest(BaseModel):
+    disaster_name: str
+    numbers: List[str]  # force list of numbers
+
+@router.post("/disaster_alert")
+async def sendAlert(alert: DisasterAlertRequest):
+    """
+    Receives a disaster name and list of phone numbers,
+    sends an alert message to all numbers via send_sms.
+    """
+    msg = f"DISASTERLINKx9040 {alert.disaster_name}\nStay safe and follow instructions."
+    print(alert.numbers)
+    print(alert.disaster_name)
+    results = []
+    for num in alert.numbers:
+        res = send_sms(num, msg)
+        results.append({"number": num, "result": res})
+
+    return {
+        "status": "completed",
+        "disaster_name": alert.disaster_name,
+        "message": msg,
+        "results": results
+    }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# sms_handler.py
+import json
+from pydantic import ValidationError
+from schemas.common import Location
+from schemas.incident import IncidentCreate
+from services import user_service, incident_service 
+from routers.users import get_user_by_phone
+
+from routers.victims import update_victim_location
+from routers.rescuers import update_rescuer_location
+from routers.shelters import add_member_to_shelter
+# from routers.rescue_ops import sendVictimListToTeamMember
+
+
+
+
+@router.post("/receive_sms")
+def receive_sms(body: dict):
+    """
+    Parses and routes an incoming SMS command to the correct service.
+    Returns the text for the reply SMS.
+    """
+    try:
+        print("body:", body)
+        # Extract the inner JSON from the 'msg' field
+        msg_field = body.get("msg", "")
+        match = re.search(r'\{.*\}$', msg_field)
+        if match:
+            inner_json = match.group(0)
+            payload = json.loads(inner_json)
+            command = payload.get("msg", "")
+            print("----------------------------------------------------------")
+            print("command:", command)
+            print(command == "User Location update")
+        else:
+            print("No JSON found in the message.")
+            payload = {}
+            command = ""
+        from_phone = body.get("from", "")
+    except (ValueError, json.JSONDecodeError):
+        print("Invalid command format. Use: COMMAND {\"json\": \"payload\"}")
+
+    # First, identify the user sending the SMS
+    # user = get_user_by_phone(from_phone)
+    # if not user:
+    #     return "Your phone number is not registered with the system. Cannot process request."
+
+    # Route command to the appropriate logic
+    # if command == "USER_STATUS_UPDATE":
+    #     try:
+    #         status = payload["status"]
+    #         location = Location.model_validate(payload["location"])
+    #         user_service.update_user_status_and_location(user['userId'], status, location)
+    #         return f"Success! Your status has been updated to '{status}'."
+    #     except (ValidationError, KeyError) as e:
+    #         return f"Error: Invalid data for STATUS_UPDATE. Details: {e}"
+
+    # elif command == "INCIDENT_REPORT":
+    #     try:
+    #         # Add the user's ID to the incident report
+    #         payload["reportedBy"] = user['userId']
+    #         incident_data = IncidentCreate.model_validate(payload)
+    #         new_incident = incident_service.create_new_incident(incident_data)
+    #         return f"Incident reported successfully. Your incident ID is {new_incident.incidentId}."
+    #     except (ValidationError, KeyError) as e:
+    #         return f"Error: Invalid data for INCIDENT_REPORT. Details: {e}"
+        
+
+    if command == "User Location update":
+        print("inside user location update")
+        # params: update_victim_location(lat: float, lon: float, msg: str, bat: int, time: str, phone: str):            
+        update_victim_location(
+            lat=payload.get("lat"),
+            lon=payload.get("lon"),
+            bat=payload.get("bat"),
+            phone=from_phone
+        )
+ 
+    elif command == "Rescuer location update":
+        print("inside rescuer location update")
+        # params: update_rescuer_location(lat: float, lon: float, msg: str, bat: int, time: str, id: str):
+        update_rescuer_location(
+            lat=payload.get("lat"),
+            lon=payload.get("lon"),
+            id=payload.get("rescuer_email")
+
+        )
+
+    elif command == "201": # add member to shelter
+        # params: addUserToShelter(shelterId: str, phone: str):
+        add_member_to_shelter(
+            shelterId=payload.get("shelterId"),
+            memberId=from_phone
+        )
+
+    elif command == "sos": # remove member from shelter
+        # create a message in the Messages collection with Type = 101
+        lat = payload.get("lat")
+        lon = payload.get("lon")
+        location = firestore.GeoPoint(lat, lon)
+        message = {
+            "Message": "SOS Alert",
+            "Sender": from_phone,
+            "Timestamp": datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=5, minutes=30))).isoformat(),  # IST timestamp
+            "Type": 101,
+            "Battery": payload.get("bat"),
+            "location": location
+        }
+
+        db.collection("Messages").add(message)
+
+        # send shelter info reply
+        # send
+        base_msg = "DISASTERLINKx9040 101 !\n"
+
+        # Construct user location
+        user_loc = firestore.GeoPoint(lat, lon)
+        top3 = get_nearest_shelters(user_loc)
+
+        # Format shelters info as readable plain text
+        shelters_lines = []
+        for shelter in top3:
+            line = f"{shelter['name']} {round(shelter['distance_km'], 2)} km, {shelter.get('latitude','N/A')},{shelter.get('longitude','N/A')}, {shelter.get('contactNumber','N/A')}"
+            shelters_lines.append(line)
+
+        # Combine into final message
+        final_msg = base_msg + "Nearest shelters:\n" + "\n".join(shelters_lines)
+        print(final_msg)
+
+        # Send SMS
+        send_sms(from_phone, final_msg)
+
+        # Optionally, return dict for logging
+        return {
+            "msg": base_msg.strip(),
+            "nearest_shelters": top3
+        }
+    
+    
+        
+
+    # elif command == "1":
+        # params: sendVictimListToTeamMember(rescuerId: str):
+        # sendVictimListToTeamMember(
+        #     rescuerId=from_phone
+        # )
+
+    # elif command == "SEND_NEAREST_SHELTER":
+    #     message_text = payload.get("msg", "")
+    #     sender = from_phone
+    #     match = re.search(r'\{.*\}$', message_text)   # matches from { to end of string
+    #     if match:
+    #         json_str = match.group(0)
+    #         data = json.loads(json_str)
+    #         latitude = data['lat']
+    #         longitude = data['lon']
+
+    #         # Create GeoPoint object
+    #         location = firestore.GeoPoint(latitude, longitude) if latitude and longitude else None
+
+    #         # Prepare document data
+    #         doc_data = {
+    #             "Message": data['msg'],
+    #             "Sender": sender,
+    #             "Timestamp": firestore.SERVER_TIMESTAMP,
+    #             "Type": int(data['sos']),
+    #             "Battery": data['bat'],
+    #             "location": location
+    #         }
+
+    #         # Add document to 'Messages' collection
+    #         db.collection("Messages").add(doc_data)
+    #         send_REPLY(sender, latitude, longitude, int(data['sos']))
+    #         return {"status": "received"}
+    #     else:
+    #         print("No JSON found in the message.")
+    #     longitude=data['lon']
+
+    #     # Create GeoPoint object
+    #     location = firestore.GeoPoint(latitude, longitude) if latitude and longitude else None
+
+    #     # Prepare document data
+    #     doc_data = {
+    #         "Message": data['msg'],
+    #         "Sender": sender,
+    #         "Timestamp": firestore.SERVER_TIMESTAMP ,
+    #         "Type": int(data['sos']),
+    #         "Battery": data['bat'],
+    #         "location": location
+    #     }
+
+    #     # Add document to 'Messages' collection
+    #     db.collection("Messages").add(doc_data)
+    #     send_REPLY(sender,latitude,longitude,int(data['sos']))
+    #     return {"status": "received"}
+    # else:
+    #     print("No JSON found in the message.")
+
+
+
+    
+
+
+    # SEND NEAREST SHELTER ID, with list of users in that particular area when team is assigned
+
+
+
+    else:
+        print(f"Unknown command: {command}.")
+
+users.py:
+from fastapi import APIRouter, HTTPException
+from firebase import db
+from config import settings
+from schemas.user import UserCreate, UserResponse
+from utils.common import calculate_age
+
+router = APIRouter(prefix="/api/users", tags=["Users"])
+
+@router.post("", response_model=UserResponse)
+def create_user(user: UserCreate):
+    try:
+        age = calculate_age(user.dob)
+        doc_ref = db.collection(settings.FIREBASE_COLLECTION_USERS).document()
+        user_data = {
+            "userId": doc_ref.id,
+            "name": user.name,
+            "dob": user.dob,
+            "age": age,
+            "gender": user.gender,
+            "contactNo": user.contactNo,
+            "city": user.city,
+            "status": "Active",
+            "bloodGroup": user.bloodGroup,
+            "location": user.location.dict(),
+        }
+        doc_ref.set(user_data)
+        return user_data
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@router.get("/{userId}", response_model=UserResponse)
+def get_user(userId: str):
+    doc = db.collection(settings.FIREBASE_COLLECTION_USERS).document(userId).get()
+    if not doc.exists:
+        print("inside get user")
+        raise HTTPException(status_code=404, detail="User not found")
+    return doc.to_dict()
+
+@router.get("/by-phone/{phone_number}", response_model=UserResponse)
+def get_user_by_phone(phone_number: str):
+    users_ref = db.collection(settings.FIREBASE_COLLECTION_USERS)
+    query = users_ref.where("contactNo", "==", phone_number).limit(1).stream()
+    user_doc = next(query, None)
+    print(query)
+    print(user_doc.to_dict() if user_doc else "No user found")
+    if user_doc and user_doc.exists:
+        return user_doc.to_dict()
+    raise HTTPException(status_code=404, detail="User not found")
+
+@router.put("/{userId}")
+def update_user(userId: str, payload: dict):
+    doc_ref = db.collection(settings.FIREBASE_COLLECTION_USERS).document(userId)
+    if not doc_ref.get().exists:
+        print("inside update user")
+        raise HTTPException(status_code=404, detail="User not found")
+    # Update age if dob is present in payload
+    if "dob" in payload:
+        payload["age"] = calculate_age(payload["dob"])
+    doc_ref.update(payload)
+    return doc_ref.get().to_dict()
+
+@router.delete("/{userId}")
+def delete_user(userId: str):
+    doc_ref = db.collection(settings.FIREBASE_COLLECTION_USERS).document(userId)
+    if not doc_ref.get().exists:
+        print("inside delete user")
+        raise HTTPException(status_code=404, detail="User not found")
+    doc_ref.delete()
+    return {"message": "User deleted successfully"}
+
+
+@router.get("", response_model=list[UserResponse])
+def list_users():
+    docs = db.collection(settings.FIREBASE_COLLECTION_USERS).stream()
+    users = [doc.to_dict() for doc in docs]
+    return users
+
+
+
+@router.get("", response_model=list[UserResponse])
+def list_users(shelterId: str | None = None):
+    docs = db.collection(settings.FIREBASE_COLLECTION_USERS).stream()
+    users = [doc.to_dict() for doc in docs]
+
+    if shelterId:
+        # fetch the shelter
+        shelter_doc = db.collection(settings.FIREBASE_COLLECTION_SHELTERS).document(shelterId).get()
+        if not shelter_doc.exists:
+            raise HTTPException(status_code=404, detail="Shelter not found")
+
+        member_ids = shelter_doc.to_dict().get("rescuedMembers", [])
+        users = [u for u in users if u["userId"] in member_ids]
+
+    return users
+
+
+victims.py:
+# routes/victims.py
+from fastapi import APIRouter, HTTPException
+from typing import List
+from schemas.victims import Victim
+from datetime import datetime, timezone
+from config import settings
+from firebase import db
+
+router = APIRouter(prefix="/api/victims", tags=["Victims"])
+
+# In-memory store for now (replace with DB later)
+victims_db: List[Victim] = []
+
+@router.get("", response_model=List[Victim])
+def get_victims():
+    docs = db.collection(settings.FIREBASE_COLLECTION_VICTIMS).stream()
+    victims = []
+    for doc in docs:
+        victim = doc.to_dict()
+        if victim.get("isActive") is True:
+        #     if "authId" in victim:
+        #         victim["victimId"] = victim.pop("authId")
+            victims.append(victim)
+
+    print(victims)
+    print("******************************************************************8")
+    print("******************************************************************8")
+    print("******************************************************************8")
+    print("******************************************************************8")
+    print("******************************************************************8")
+
+    return victims
+
+
+
+
+
+
+
+
+
+
+
+
+# victim sms:
+from pytz import timezone
+
+
+def update_victim_location(lat: float, lon: float, bat: int, phone: str):
+    # get id==phone from victims collection    
+    # update the victim document
+    # trim leading + from phone if present
+    if phone.startswith("+"):
+        phone = phone[1:]
+    doc_ref = db.collection(settings.FIREBASE_COLLECTION_VICTIMS).document(phone)
+    ist = timezone('Asia/Kolkata')
+    now_ist = datetime.now(ist)
+    victim_data = {
+        "latitude": lat,
+        "longitude": lon,
+        "battery": bat,
+        "updatedAt": int(now_ist.timestamp() * 1000)
+
+    }
+    doc_ref.update(victim_data)
+
+

@@ -1,0 +1,228 @@
+common.py:
+from pydantic import BaseModel
+from typing import Optional
+
+class Location(BaseModel):
+    latitude: float
+    longitude: float
+
+
+communication.py:
+from pydantic import BaseModel
+from typing import Optional
+from schemas.common import Location
+
+class StatusUpdate(BaseModel):
+    status: str  # "Safe" or "Needs Immediate Help"
+
+class Broadcast(BaseModel):
+    message: str
+    area: Optional[dict] = None  # { latitude, longitude, radius }
+
+
+incident.py:
+# schemas/incident.py
+
+from pydantic import BaseModel, Field
+from typing import Optional
+from enum import Enum
+from datetime import datetime
+from .common import Location
+
+class IncidentType(str, Enum):
+    FLOOD = "Flood"
+    FIRE = "Fire"
+    BUILDING_COLLAPSE = "Building Collapse"
+    LANDSLIDE = "Landslide"
+    MEDICAL_EMERGENCY = "Medical Emergency"
+    OTHER = "Other"
+
+class IncidentSeverity(str, Enum):
+    LOW = "Low"
+    MEDIUM = "Medium"
+    HIGH = "High"
+    CRITICAL = "Critical"
+
+class IncidentStatus(str, Enum):
+    REPORTED = "Reported"
+    VERIFIED = "Verified"
+    IN_PROGRESS = "In Progress"
+    RESOLVED = "Resolved"
+
+class IncidentCreate(BaseModel):
+    type: IncidentType
+    location: Location
+    severity: IncidentSeverity
+    reportedBy: str  # User ID
+    description: Optional[str] = None
+
+class IncidentUpdate(BaseModel):
+    status: Optional[IncidentStatus] = None
+    severity: Optional[IncidentSeverity] = None
+    description: Optional[str] = None
+
+class IncidentResponse(IncidentCreate):
+    incidentId: str
+    status: IncidentStatus = IncidentStatus.REPORTED
+    timestamp: datetime
+
+messages.py:
+# schemas/messages.py
+
+from pydantic import BaseModel, Field
+from typing import Optional
+from datetime import datetime
+from .common import Location
+
+
+class MessageBase(BaseModel):
+    sender: str = Field(..., alias="Sender")
+    type: int = Field(..., alias="Type")
+    battery: Optional[int] = Field(None, alias="Battery")
+    timestamp: datetime = Field(..., alias="Timestamp")
+    message: str = Field(..., alias="Message")
+    location: Optional[Location] = None
+
+    class Config:
+        allow_population_by_field_name = True
+
+
+rescue.py:
+# backend/app/schemas/rescue.py
+
+from pydantic import BaseModel, Field
+from typing import List, Optional, Dict
+from enum import Enum
+from .common import Location # Assuming you have a common schema for Location
+
+# --- Enums for status choices ---
+class TeamStatus(str, Enum):
+    FREE = "Free"
+    ASSIGNED = "Assigned"
+    UNAVAILABLE = "Unavailable"
+    UNKNOWN = "Unknown"
+
+
+# --- Rescuer Schemas ---
+class RescueMemberCreate(BaseModel):
+    email: str
+    name: str
+    dob: str
+    phone: str
+    status: Optional[str] = "Free"
+    loginAvailable: Optional[bool] = True
+
+class RescueMemberResponse(BaseModel):
+    id: str
+    name: str
+    dob: str
+    phone: str
+    status: str = "Free"
+    loginAvailable: Optional[bool] = True
+    teamId: Optional[str] = None
+    teamName: Optional[str] = None
+    location: Optional[Location] = None
+
+
+# --- Team Schemas (NEW STRUCTURE) ---
+
+class LeaderInfo(BaseModel):
+    id: str
+    name: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+
+class RescueTeamCreate(BaseModel):
+    teamName: str
+    leader: Optional[str] = None  # Leader's ID
+    members: List[str] = Field(default_factory=list) # List of member IDs
+
+class RescueTeamUpdate(BaseModel):
+    teamName: Optional[str] = None
+    leader: Optional[str] = None
+    members: Optional[List[str]] = None
+
+class RescueTeamResponse(BaseModel):
+    teamAddress: Optional[str] = None
+    teamId: str
+    teamName: Optional[str] = None
+    leader: Optional[LeaderInfo] = None
+    members: Dict[str, Optional[str]] = Field(default_factory=dict) # {id: name, id: name}
+    status: TeamStatus = TeamStatus.UNKNOWN
+    assignedLatitude: Optional[float] = None
+    assignedLongitude: Optional[float] = None
+    nearestVictims: Optional[List[str]] = None
+
+shelter.py:
+# shelter schema
+
+from pydantic import BaseModel
+from typing import List, Optional
+import time
+from schemas.user import UserResponse
+
+
+class ShelterCreate(BaseModel):
+    name: str
+    address: str
+    description: Optional[str] = None
+    capacity: int
+    contactNumber: str
+    latitude: float
+    longitude: float
+    amenities: List[str] = []
+    status: str = "Available"
+    isActive: bool = True
+
+
+class ShelterResponse(ShelterCreate):
+    id: str
+    currentOccupancy: int = 0
+    rescuedMembers: List[UserResponse] = []   # ✅ full user details, not just IDs
+    lastUpdated: int = int(time.time() * 1000)
+
+
+user.py:
+from pydantic import BaseModel, Field
+from typing import Optional
+
+class Location(BaseModel):
+    latitude: float
+    longitude: float
+
+class UserCreate(BaseModel):
+    name: str
+    dob: str
+    gender: str
+    contactNo: str
+    city: str
+    bloodGroup: str
+    location: Location
+
+class UserResponse(UserCreate):
+    userId: str
+    age: int
+    status: str = "Active"
+
+
+victims.py:
+# models/victims.py
+from pydantic import BaseModel
+from typing import Optional
+from datetime import datetime
+from schemas.common import Location
+
+
+class Victim(BaseModel):
+    authId: str
+    bloodGroup: Optional[str] = None
+    city: Optional[str] = None
+    createdAt: datetime
+    dateOfBirth: datetime
+    gender: Optional[str] = None
+    isActive: bool = True
+    latitude: float
+    longitude: float
+    name: str
+    phoneNumber: Optional[str] = None
+    updatedAt: datetime
